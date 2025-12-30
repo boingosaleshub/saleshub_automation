@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const { chromium } = require('playwright');
 
 const app = express();
@@ -14,16 +15,16 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+app.use(compression()); // Add compression for large responses
 app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ============== UTILITY ENDPOINTS ==============
 
-// Health check endpoint (required by Render)
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// Root endpoint
 app.get('/', (req, res) => {
     res.json({
         service: 'Boingo Playwright Automation',
@@ -36,66 +37,169 @@ app.get('/', (req, res) => {
     });
 });
 
-// ============== HELPER FUNCTIONS (Restored from User Snippet) ==============
+// ============== HELPER FUNCTIONS ==============
 
 function randomDelay(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Human-like wait - simulates natural pauses with slight variations (faster)
 async function humanWait(page, baseMs) {
-    // Add 10-30% variation to make it feel more natural
     const variation = baseMs * (0.1 + Math.random() * 0.2);
     const actualDelay = Math.floor(baseMs + (Math.random() > 0.5 ? variation : -variation * 0.3));
-    await page.waitForTimeout(Math.max(actualDelay, 80)); // Minimum 80ms
+    await page.waitForTimeout(Math.max(actualDelay, 80));
 }
 
-// Simulate human-like typing for a locator element (faster typing)
 async function humanTypeLocator(locator, text, page) {
     await locator.click();
     await page.waitForTimeout(randomDelay(80, 150));
-
     for (const char of text) {
         await locator.type(char, { delay: 0 });
-        // Faster typing but still variable (30-70ms between keystrokes)
         await page.waitForTimeout(randomDelay(30, 70));
     }
 }
 
-// Move mouse to element in a faster but still natural path before clicking
 async function humanClick(page, locator) {
     const box = await locator.boundingBox();
     if (box) {
-        // Target position with slight randomness (don't always click dead center)
         const targetX = box.x + box.width / 2 + randomDelay(-5, 5);
         const targetY = box.y + box.height / 2 + randomDelay(-3, 3);
-
-        // Quick but natural mouse move (fewer intermediate steps)
         await page.mouse.move(targetX, targetY, { steps: randomDelay(2, 3) });
         await page.waitForTimeout(randomDelay(30, 80));
     }
     await locator.click();
 }
 
-// Short wait for element interactions (faster but still natural)
 async function shortWait(page) {
     await page.waitForTimeout(randomDelay(200, 400));
 }
 
-// Medium wait for page transitions/loads
 async function mediumWait(page) {
     await page.waitForTimeout(randomDelay(500, 900));
 }
 
-// Longer wait for heavy content loading
 async function longWait(page) {
     await page.waitForTimeout(randomDelay(1200, 2000));
 }
 
-// ============== OOKLA CELL ANALYTICS AUTOMATION ==============
+// ============== SCREENSHOT HELPER FUNCTIONS ==============
+
+async function selectView(page, viewName) {
+    console.log(`  Selecting ${viewName}...`);
+    try {
+        let dropdown = page.locator('div.v-filterselect:has(img[src*="inandoutdoor"])').first();
+        if (await dropdown.count() === 0) {
+            dropdown = page.locator('div.v-filterselect.map-cb').first();
+        }
+        if (await dropdown.count() === 0) {
+            dropdown = page.locator('div.v-filterselect').first();
+        }
+
+        await dropdown.waitFor({ state: 'visible', timeout: 10000 });
+        const button = dropdown.locator('div.v-filterselect-button');
+        await button.click({ force: true });
+        await page.waitForTimeout(500);
+
+        await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
+            state: 'visible',
+            timeout: 5000
+        });
+
+        const option = page.locator(`#VAADIN_COMBOBOX_OPTIONLIST td:has-text("${viewName}")`).first();
+        await option.waitFor({ state: 'visible', timeout: 5000 });
+        await option.click();
+
+        console.log(`    ✓ ${viewName} selected`);
+
+        // Wait for map to update
+        await page.waitForTimeout(2000);
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
+        await page.waitForTimeout(1000);
+
+        return true;
+    } catch (error) {
+        console.error(`    Error selecting ${viewName}:`, error.message);
+        return false;
+    }
+}
+
+async function takeScreenshot(page, viewType, sanitizedAddress, timestamp) {
+    console.log(`  Taking ${viewType} screenshot...`);
+    try {
+        // Wait for network to be idle
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {
+            console.log('    - Network not idle, proceeding anyway...');
+        });
+
+        await page.waitForTimeout(2000);
+
+        // Try multiple selectors
+        const selectors = [
+            '.v-splitpanel-second-container.v-scrollable',
+            '.v-splitpanel-second-container',
+            '.leaflet-container',
+            '.v-ui'
+        ];
+
+        let contentArea = null;
+        for (const selector of selectors) {
+            const element = page.locator(selector).first();
+            if (await element.count() > 0) {
+                contentArea = element;
+                console.log(`    ✓ Using selector: ${selector}`);
+                break;
+            }
+        }
+
+        if (!contentArea) {
+            throw new Error('No suitable screenshot element found');
+        }
+
+        await contentArea.waitFor({ state: 'visible', timeout: 10000 });
+        const buffer = await contentArea.screenshot({
+            type: 'png',
+            timeout: 30000
+        });
+
+        const sizeKB = (buffer.length / 1024).toFixed(2);
+        console.log(`    ✓ Screenshot captured: ${sizeKB} KB`);
+
+        return {
+            filename: `ookla_${viewType}_${sanitizedAddress}_${timestamp}.png`,
+            buffer: buffer.toString('base64'),
+            size: sizeKB
+        };
+
+    } catch (error) {
+        console.log(`    Error with primary method: ${error.message}`);
+        console.log('    Trying full-page fallback...');
+
+        try {
+            const buffer = await page.screenshot({
+                type: 'png',
+                clip: { x: 0, y: 50, width: 1280, height: 670 },
+                timeout: 30000
+            });
+
+            const sizeKB = (buffer.length / 1024).toFixed(2);
+            console.log(`    ✓ Fallback screenshot: ${sizeKB} KB`);
+
+            return {
+                filename: `ookla_${viewType}_fullpage_${sanitizedAddress}_${timestamp}.png`,
+                buffer: buffer.toString('base64'),
+                size: sizeKB
+            };
+        } catch (fallbackError) {
+            console.error(`    ✗ Fallback failed: ${fallbackError.message}`);
+            throw fallbackError;
+        }
+    }
+}
+
+// ============== OOKLA AUTOMATION ==============
 
 app.post('/api/automate', async (req, res) => {
     let browser;
+    const startTime = Date.now();
 
     try {
         const { address, carriers, coverageTypes } = req.body;
@@ -105,16 +209,14 @@ app.post('/api/automate', async (req, res) => {
         }
 
         console.log('='.repeat(60));
-        console.log('Starting Ookla automation (Restored Logic)');
+        console.log('Starting Ookla automation');
         console.log('Address:', address);
         console.log('Carriers:', carriers);
         console.log('Coverage types:', coverageTypes);
         console.log('='.repeat(60));
 
-        // Launch browser with stealth settings
-        // NOTE: For Render/Vercel, we MUST use headless: true
         browser = await chromium.launch({
-            headless: true, // Force headless for server deployment
+            headless: true,
             slowMo: 50,
             args: [
                 '--disable-blink-features=AutomationControlled',
@@ -135,7 +237,6 @@ app.post('/api/automate', async (req, res) => {
             permissions: ['geolocation'],
         });
 
-        // Add stealth scripts
         await context.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -145,6 +246,7 @@ app.post('/api/automate', async (req, res) => {
 
         const page = await context.newPage();
 
+        // Step 1: Login
         console.log('Step 1: Navigating to login page...');
         await page.goto('https://cellanalytics.ookla.com/login', {
             waitUntil: 'domcontentloaded',
@@ -154,7 +256,7 @@ app.post('/api/automate', async (req, res) => {
         await page.waitForSelector('input[name="username"]', { timeout: 10000 });
         await humanWait(page, 800);
 
-        console.log('Step 2: Filling in credentials with human-like typing...');
+        console.log('Step 2: Filling credentials...');
         const usernameInput = page.locator('input[name="username"]');
         const passwordInput = page.locator('input[name="password"]');
 
@@ -168,15 +270,15 @@ app.post('/api/automate', async (req, res) => {
         await humanTypeLocator(passwordInput, 'Boingo2025!', page);
         await humanWait(page, 600);
 
-        console.log('Step 3: Submitting login form...');
+        console.log('Step 3: Submitting login...');
         const submitButton = page.locator('input[type="submit"], button[type="submit"]');
         await humanClick(page, submitButton);
 
         try {
             await page.waitForURL('**/cellanalytics.ookla.com/**', { timeout: 30000 });
-            console.log('✓ Redirected to dashboard');
+            console.log('  ✓ Redirected to dashboard');
         } catch (error) {
-            console.log('Navigation wait timeout, checking URL...');
+            console.log('  Navigation wait timeout, checking URL...');
         }
 
         await longWait(page);
@@ -187,33 +289,28 @@ app.post('/api/automate', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Login failed' });
         }
 
-        console.log('✓ Login successful!');
+        console.log('  ✓ Login successful!');
 
-        // Step 4: Map View to Day
-        console.log('Step 4: Changing map view to Day...');
+        // Step 4: Day View
+        console.log('Step 4: Changing to Day view...');
         try {
             const layersToggle = page.locator('a.leaflet-control-layers-toggle[title="Layers"]');
             await layersToggle.waitFor({ state: 'attached', timeout: 8000 });
             await layersToggle.hover();
             const dayRadioInput = page.locator('input[type="radio"].leaflet-control-layers-selector[name="leaflet-base-layers"]').nth(3);
             await dayRadioInput.click({ force: true, timeout: 2000 });
-            console.log('✓ Day view selected');
+            console.log('  ✓ Day view selected');
             await page.mouse.move(100, 100);
         } catch (error) {
-            console.log('Day view switch error, trying alternatives...', error.message);
+            console.log('  Day view switch error, trying alternatives...');
             try {
                 await page.evaluate(() => {
                     const radios = document.querySelectorAll('input[type="radio"].leaflet-control-layers-selector');
                     if (radios[3]) radios[3].click();
                 });
-                console.log('✓ Day view selected (via evaluate)');
-            } catch (e1) {
-                try {
-                    await page.click('label:has-text("Day")', { force: true, timeout: 1000 });
-                    console.log('✓ Day view selected (via label)');
-                } catch (e2) {
-                    console.log('Note: Could not change to Day view');
-                }
+                console.log('  ✓ Day view selected (via evaluate)');
+            } catch (e) {
+                console.log('  Note: Could not change to Day view');
             }
         }
 
@@ -226,105 +323,63 @@ app.post('/api/automate', async (req, res) => {
         await addressInput.press('Control+A');
         await page.waitForTimeout(randomDelay(150, 300));
         await humanTypeLocator(addressInput, address, page);
-        console.log('✓ Address entered');
+        console.log('  ✓ Address entered');
         await mediumWait(page);
         await addressInput.press('Enter');
-        console.log('✓ Enter pressed');
+        console.log('  ✓ Enter pressed');
         await longWait(page);
-        await mediumWait(page);
-        await longWait(page); // Extra wait for map load
+        await longWait(page);
 
         // Step 6: Network Provider
-        console.log('Step 6: Opening Network Provider options...');
+        console.log('Step 6: Opening Network Provider...');
         const networkProviderToggle = page.locator('text=Network Provider').locator('..').locator('span').first();
         await networkProviderToggle.waitFor({ timeout: 30000 });
-        try {
-            await networkProviderToggle.scrollIntoViewIfNeeded({ timeout: 5000 });
-        } catch (e) {
-            console.log('  - Warning: Scroll to Network Provider timed out, attempting click anyway...');
-        }
         await networkProviderToggle.click({ force: true });
-        console.log('✓ Network Provider section opened');
+        console.log('  ✓ Network Provider section opened');
         await longWait(page);
 
         // Step 7: Carriers
         const carriersToSelect = carriers || [];
         const allCarriers = { 'AT&T': 'AT&T US', 'Verizon': 'Verizon', 'T-Mobile': 'T-Mobile US' };
 
-        console.log('Step 7: Unchecking all carriers first...');
+        console.log('Step 7: Configuring carriers...');
         for (const [userName, siteName] of Object.entries(allCarriers)) {
             try {
                 const carrierLabel = page.locator(`label:has-text("${siteName}")`).first();
                 await carrierLabel.waitFor({ state: 'visible', timeout: 5000 });
                 const carrierLabelFor = await carrierLabel.getAttribute('for');
                 const carrierCheckbox = page.locator(`#${carrierLabelFor}`);
-                if (await carrierCheckbox.isChecked()) {
+                const isChecked = await carrierCheckbox.isChecked();
+                const shouldBeChecked = carriersToSelect.includes(userName);
+
+                if (isChecked !== shouldBeChecked) {
                     await carrierLabel.click();
-                    console.log(`  Unchecked ${siteName}`);
+                    console.log(`  ${shouldBeChecked ? '✓ Checked' : '✗ Unchecked'} ${siteName}`);
                     await shortWait(page);
                 }
-            } catch (error) { }
+            } catch (error) {
+                console.log(`  Warning: Could not configure ${userName}`);
+            }
         }
         await mediumWait(page);
-
-        console.log('Step 7: Selecting user-selected carriers...');
-        for (const carrierName of carriersToSelect) {
-            try {
-                let carrierLabel;
-                if (carrierName === 'T-Mobile' || carrierName === 'T-Mobile US') {
-                    carrierLabel = page.locator('label:has-text("T-Mobile US")').first();
-                } else if (carrierName === 'AT&T') {
-                    carrierLabel = page.locator('label:has-text("AT&T US")').first();
-                } else if (carrierName === 'Verizon') {
-                    carrierLabel = page.locator('label:has-text("Verizon")').first();
-                } else {
-                    carrierLabel = page.locator(`label:has-text("${carrierName}")`).first();
-                }
-                await carrierLabel.waitFor({ state: 'visible', timeout: 10000 });
-                const carrierLabelFor = await carrierLabel.getAttribute('for');
-                const carrierCheckbox = page.locator(`#${carrierLabelFor}`);
-                if (!(await carrierCheckbox.isChecked())) {
-                    try {
-                        await carrierLabel.scrollIntoViewIfNeeded({ timeout: 5000 });
-                    } catch (e) {
-                        console.log(`  - Warning: Scroll to ${carrierName} timed out, attempting click anyway...`);
-                    }
-                    await carrierLabel.click({ force: true });
-                    console.log(`✓ ${carrierName} selected`);
-                }
-            } catch (error) {
-                console.log(`Error selecting ${carrierName}:`, error.message);
-            }
-            await mediumWait(page);
-        }
 
         // Step 8: LTE
         console.log('Step 8: Opening LTE options...');
         const lteToggle = page.locator('text=LTE').locator('..').locator('span').first();
         await lteToggle.waitFor({ timeout: 30000 });
-        try {
-            await lteToggle.scrollIntoViewIfNeeded({ timeout: 5000 });
-        } catch (e) {
-            console.log('  - Warning: Scroll to LTE timed out, attempting click anyway...');
-        }
         await lteToggle.click({ force: true });
-        console.log('✓ LTE section opened');
+        console.log('  ✓ LTE section opened');
         await longWait(page);
 
         // Step 9: RSRP
-        console.log('Step 9: Selecting ONLY RSRP option...');
+        console.log('Step 9: Selecting RSRP...');
         try {
             const rsrpRow = page.locator('tr').filter({ has: page.locator('span.v-captiontext:has-text("RSRP")') });
             const rsrpCheckbox = rsrpRow.locator('input[type="checkbox"]').first();
             await rsrpCheckbox.waitFor({ state: 'attached', timeout: 15000 });
             if (!(await rsrpCheckbox.isChecked())) {
-                try {
-                    await rsrpCheckbox.scrollIntoViewIfNeeded({ timeout: 5000 });
-                } catch (e) {
-                    console.log('  - Warning: Scroll to RSRP timed out, attempting check anyway...');
-                }
                 await rsrpCheckbox.check({ force: true });
-                console.log('✓ RSRP checkbox selected');
+                console.log('  ✓ RSRP checkbox selected');
             }
             await mediumWait(page);
 
@@ -341,11 +396,12 @@ app.post('/api/automate', async (req, res) => {
                 } catch (e) { }
             }
         } catch (error) {
-            console.log('Error with RSRP selection:', error.message);
+            console.log('  Error with RSRP selection:', error.message);
         }
         await mediumWait(page);
 
-        // Screenshots
+        // ============== SCREENSHOTS ==============
+
         const hasIndoor = coverageTypes?.includes('Indoor');
         const hasOutdoor = coverageTypes?.includes('Outdoor');
         const hasIndoorAndOutdoor = coverageTypes?.includes('Indoor & Outdoor');
@@ -354,198 +410,85 @@ app.post('/api/automate', async (req, res) => {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
 
+        // Zoom and collapse (do once)
+        if (hasIndoor || hasOutdoor || hasIndoorAndOutdoor) {
+            console.log('Step 10: Zooming in...');
+            try {
+                const zoomButton = page.locator('div.v-button.v-widget span.v-icon.FontAwesome').first();
+                await zoomButton.waitFor({ state: 'visible', timeout: 10000 });
+                await zoomButton.click({ force: true });
+                await page.waitForTimeout(800);
+                await zoomButton.click({ force: true });
+                await page.waitForTimeout(800);
+                console.log('  ✓ Zoomed in 2x');
+            } catch (e) {
+                console.log('  Warning: Could not zoom');
+            }
+
+            console.log('Step 11: Collapsing sidebar...');
+            try {
+                const collapseButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();
+                await collapseButton.waitFor({ state: 'visible', timeout: 10000 });
+                await collapseButton.click({ force: true });
+                await page.waitForTimeout(800);
+                console.log('  ✓ Sidebar collapsed');
+            } catch (e) {
+                console.log('  Warning: Could not collapse sidebar');
+            }
+        }
+
         // Indoor View
         if (hasIndoor) {
-            console.log('Step 10: Selecting Indoor View...');
-            try {
-                let indoorOutdoorDropdown = page.locator('div.v-filterselect:has(img[src*="inandoutdoor"])');
-                if (await indoorOutdoorDropdown.count() === 0) indoorOutdoorDropdown = page.locator('div.v-filterselect.map-cb').filter({ has: page.locator('img[src*="indoor"]') });
-                if (await indoorOutdoorDropdown.count() === 0) indoorOutdoorDropdown = page.locator('div.v-filterselect-map-cb').first();
-
-                await indoorOutdoorDropdown.waitFor({ state: 'visible', timeout: 10000 });
-                await humanClick(page, indoorOutdoorDropdown.locator('div.v-filterselect-button'));
-                await shortWait(page);
-                await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', { state: 'visible', timeout: 5000 });
-
-                const indoorViewOption = page.locator('#VAADIN_COMBOBOX_OPTIONLIST td:has-text("Indoor View")');
-                await indoorViewOption.waitFor({ state: 'visible', timeout: 5000 });
-                await indoorViewOption.click();
-                console.log('✓ Indoor View selected');
-                await mediumWait(page);
-
-            } catch (error) {
-                console.log('Error selecting Indoor View (primary):', error.message);
-                try {
-                    await page.evaluate(() => {
-                        const dropdowns = document.querySelectorAll('div.v-filterselect');
-                        for (const dropdown of dropdowns) {
-                            if (dropdown.querySelector('img[src*="indoor"]')) {
-                                dropdown.querySelector('div.v-filterselect-button')?.click();
-                                break;
-                            }
-                        }
-                    });
-                    await shortWait(page);
-                    await page.click('#VAADIN_COMBOBOX_OPTIONLIST td:has-text("Indoor View")', { timeout: 5000 });
-                } catch (e) { }
-            }
-
-            // Zoom
-            console.log('Step 11: Clicking zoom-in button twice...');
-            // Robust class-based selector for Zoom button (FontAwesome icon inside button)
-            const zoomButtonSelector = 'div.v-button.v-widget span.v-icon.FontAwesome';
-            try {
-                const zoomButton = page.locator(zoomButtonSelector).first();
-                await zoomButton.waitFor({ state: 'visible', timeout: 10000 });
-                await humanClick(page, zoomButton);
-                await mediumWait(page);
-                await humanClick(page, zoomButton);
-                await mediumWait(page);
-            } catch (e) {
-                console.log('Error clicking zoom button:', e.message);
-                try {
-                    const mapContainer = page.locator('.v-splitpanel-second-container');
-                    const plusBtn = mapContainer.locator('.v-button').first();
-                    await plusBtn.click({ force: true });
-                } catch (e2) { }
-            }
-
-            // Collapse
-            console.log('Step 12: Clicking collapse button...');
-            const collapseButtonSelector = 'div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget';
-            try {
-                const collapseButton = page.locator(collapseButtonSelector).first();
-                await collapseButton.waitFor({ state: 'visible', timeout: 10000 });
-                await humanClick(page, collapseButton);
-                await mediumWait(page);
-            } catch (e) {
-                console.log('Error clicking collapse button:', e.message);
-            }
-
-            // Screenshot
-            console.log('Step 13: Taking Indoor screenshot...');
-            try {
-                await mediumWait(page);
-                const contentArea = page.locator('.v-splitpanel-second-container.v-scrollable');
-                await contentArea.waitFor({ state: 'visible', timeout: 10000 });
-                const buffer = await contentArea.screenshot({ type: 'png' });
-                screenshots.push({
-                    filename: `ookla_INDOOR_${sanitizedAddress}_${timestamp}.png`,
-                    buffer: buffer.toString('base64')
-                });
-                console.log('✓ Indoor screenshot captured');
-            } catch (e) {
-                console.log('Error taking Indoor screenshot, trying fallback...');
-                try {
-                    const buffer = await page.screenshot({ type: 'png', clip: { x: 0, y: 50, width: 1280, height: 670 } });
-                    screenshots.push({
-                        filename: `ookla_INDOOR_fullpage_${sanitizedAddress}_${timestamp}.png`,
-                        buffer: buffer.toString('base64')
-                    });
-                    console.log('✓ Indoor fallback screenshot captured');
-                } catch (e2) { }
+            console.log('Step 12: Indoor View...');
+            if (await selectView(page, 'Indoor View')) {
+                const screenshot = await takeScreenshot(page, 'INDOOR', sanitizedAddress, timestamp);
+                screenshots.push(screenshot);
             }
         }
 
         // Outdoor View
         if (hasOutdoor) {
-            console.log('Step 14: Selecting Outdoor View...');
-            try {
-                let indoorOutdoorDropdown = page.locator('div.v-filterselect:has(img[src*="inandoutdoor"])');
-                if (await indoorOutdoorDropdown.count() === 0) indoorOutdoorDropdown = page.locator('div.v-filterselect.map-cb').filter({ has: page.locator('img[src*="indoor"]') });
-                if (await indoorOutdoorDropdown.count() === 0) indoorOutdoorDropdown = page.locator('div.v-filterselect-map-cb').first();
-
-                await indoorOutdoorDropdown.waitFor({ state: 'visible', timeout: 10000 });
-                await humanClick(page, indoorOutdoorDropdown.locator('div.v-filterselect-button'));
-                await shortWait(page);
-                await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', { state: 'visible', timeout: 5000 });
-
-                const outdoorViewOption = page.locator('#VAADIN_COMBOBOX_OPTIONLIST td:has-text("Outdoor View")');
-                await outdoorViewOption.waitFor({ state: 'visible', timeout: 5000 });
-                await outdoorViewOption.click();
-                console.log('✓ Outdoor View selected');
-                await mediumWait(page);
-                await longWait(page);
-
-            } catch (error) {
-                console.log('Error selecting Outdoor View:', error.message);
-            }
-
-            try {
-                await mediumWait(page);
-                const contentArea = page.locator('.v-splitpanel-second-container.v-scrollable');
-                await contentArea.waitFor({ state: 'visible', timeout: 10000 });
-                const buffer = await contentArea.screenshot({ type: 'png' });
-                screenshots.push({
-                    filename: `ookla_OUTDOOR_${sanitizedAddress}_${timestamp}.png`,
-                    buffer: buffer.toString('base64')
-                });
-                console.log('✓ Outdoor screenshot captured');
-            } catch (e) {
-                try {
-                    const buffer = await page.screenshot({ type: 'png', clip: { x: 0, y: 50, width: 1280, height: 670 } });
-                    screenshots.push({
-                        filename: `ookla_OUTDOOR_fullpage_${sanitizedAddress}_${timestamp}.png`,
-                        buffer: buffer.toString('base64')
-                    });
-                    console.log('✓ Outdoor fallback screenshot captured');
-                } catch (e2) { }
+            console.log('Step 13: Outdoor View...');
+            if (await selectView(page, 'Outdoor View')) {
+                const screenshot = await takeScreenshot(page, 'OUTDOOR', sanitizedAddress, timestamp);
+                screenshots.push(screenshot);
             }
         }
 
-        // Indoor & Outdoor
+        // Indoor & Outdoor View
         if (hasIndoorAndOutdoor) {
-            console.log('Step 16: Selecting Indoor & Outdoor View...');
-            try {
-                let indoorOutdoorDropdown = page.locator('div.v-filterselect:has(img[src*="inandoutdoor"])');
-                if (await indoorOutdoorDropdown.count() === 0) indoorOutdoorDropdown = page.locator('div.v-filterselect.map-cb').filter({ has: page.locator('img[src*="indoor"]') });
-                if (await indoorOutdoorDropdown.count() === 0) indoorOutdoorDropdown = page.locator('div.v-filterselect-map-cb').first();
+            console.log('Step 14: Indoor & Outdoor View...');
+            const viewNames = ['Outdoor & Indoor', 'Outdoor &amp; Indoor', 'Indoor & Outdoor'];
+            let success = false;
 
-                await indoorOutdoorDropdown.waitFor({ state: 'visible', timeout: 10000 });
-                await humanClick(page, indoorOutdoorDropdown.locator('div.v-filterselect-button'));
-                await shortWait(page);
-                await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', { state: 'visible', timeout: 5000 });
-
-                let option = page.locator('#VAADIN_COMBOBOX_OPTIONLIST td:has-text("Outdoor & Indoor")');
-                if (await option.count() === 0) option = page.locator('#VAADIN_COMBOBOX_OPTIONLIST td:has-text("Outdoor &amp; Indoor")');
-                if (await option.count() === 0) option = page.locator('#VAADIN_COMBOBOX_OPTIONLIST td').filter({ hasText: /outdoor.*indoor/i });
-                if (await option.count() === 0) option = page.locator('#VAADIN_COMBOBOX_OPTIONLIST td').filter({ hasText: /indoor.*outdoor/i });
-
-                await option.waitFor({ state: 'visible', timeout: 5000 });
-                await option.click();
-                console.log('✓ Indoor & Outdoor View selected');
-                await mediumWait(page);
-                await longWait(page);
-
-            } catch (error) {
-                console.log('Error selecting Indoor & Outdoor View:', error.message);
+            for (const viewName of viewNames) {
+                if (await selectView(page, viewName)) {
+                    success = true;
+                    break;
+                }
             }
 
-            try {
-                await mediumWait(page);
-                const contentArea = page.locator('.v-splitpanel-second-container.v-scrollable');
-                await contentArea.waitFor({ state: 'visible', timeout: 10000 });
-                const buffer = await contentArea.screenshot({ type: 'png' });
-                screenshots.push({
-                    filename: `ookla_OUTDOOR_INDOOR_${sanitizedAddress}_${timestamp}.png`,
-                    buffer: buffer.toString('base64')
-                });
-                console.log('✓ Indoor & Outdoor screenshot captured');
-            } catch (e) {
-                try {
-                    const buffer = await page.screenshot({ type: 'png', clip: { x: 0, y: 50, width: 1280, height: 670 } });
-                    screenshots.push({
-                        filename: `ookla_OUTDOOR_INDOOR_fullpage_${sanitizedAddress}_${timestamp}.png`,
-                        buffer: buffer.toString('base64')
-                    });
-                } catch (e2) { }
+            if (success) {
+                const screenshot = await takeScreenshot(page, 'OUTDOOR_INDOOR', sanitizedAddress, timestamp);
+                screenshots.push(screenshot);
             }
         }
 
-        console.log('✓ All steps complete!');
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log('='.repeat(60));
+        console.log(`✓ All steps complete! (${duration}s)`);
+        console.log(`Screenshots captured: ${screenshots.length}`);
+        console.log(`Total response size: ~${(JSON.stringify(screenshots).length / 1024).toFixed(2)} KB`);
+        console.log('='.repeat(60));
+
         await browser.close();
 
-        return res.json({ success: true, screenshots });
+        return res.json({
+            success: true,
+            screenshots,
+            duration: parseFloat(duration),
+            count: screenshots.length
+        });
 
     } catch (error) {
         console.error('Automation error:', error);
