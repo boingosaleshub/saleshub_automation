@@ -211,10 +211,22 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 6: Network Provider
         console.log('Step 6: Configuring Network Providers...');
-        const networkProviderToggle = page.locator('text=Network Provider').locator('..').locator('span').first();
-        await networkProviderToggle.waitFor({ timeout: 10000 });
-        await networkProviderToggle.scrollIntoViewIfNeeded();
-        await networkProviderToggle.click();
+        try {
+            const networkProviderToggle = page.locator('text=Network Provider').locator('..').locator('span').first();
+            await networkProviderToggle.waitFor({ state: 'attached', timeout: 20000 });
+            try {
+                await networkProviderToggle.scrollIntoViewIfNeeded({ timeout: 8000 });
+            } catch (e) {
+                console.log('  - Warning: Scroll to Network Provider timed out, attempting click anyway...');
+            }
+            // Check if already expanded (optional logic could go here, but usually it's a toggle)
+            // Just click with force
+            await networkProviderToggle.click({ timeout: 10000, force: true });
+            console.log('✓ Network Provider section interaction attempted');
+        } catch (error) {
+            console.error('Error in Step 6 (Network Provider):', error.message);
+            throw new Error(`Failed to toggle Network Provider: ${error.message}`);
+        }
         await longWait(page);
 
         // Step 7: Configure carriers
@@ -265,10 +277,21 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 8: LTE options
         console.log('Step 8: Configuring LTE...');
-        const lteToggle = page.locator('text=LTE').locator('..').locator('span').first();
-        await lteToggle.waitFor({ timeout: 10000 });
-        await lteToggle.scrollIntoViewIfNeeded();
-        await lteToggle.click();
+        try {
+            const lteToggle = page.locator('text=LTE').locator('..').locator('span').first();
+            await lteToggle.waitFor({ state: 'attached', timeout: 20000 });
+            try {
+                await lteToggle.scrollIntoViewIfNeeded({ timeout: 8000 });
+            } catch (e) {
+                console.log('  - Warning: Scroll to LTE timed out, attempting click anyway...');
+            }
+            await lteToggle.click({ timeout: 10000, force: true });
+            console.log('✓ LTE section interaction attempted');
+        } catch (error) {
+            console.error('Error in Step 8 (LTE):', error.message);
+            // We continue because RSRP might still be reachable or visible? 
+            // But usually it's inside LTE. Let's log and try to proceed.
+        }
         await longWait(page);
 
         // Step 9: RSRP
@@ -278,8 +301,12 @@ app.post('/api/automate', async (req, res) => {
             const rsrpCheckbox = rsrpRow.locator('input[type="checkbox"]').first();
             await rsrpCheckbox.waitFor({ state: 'attached', timeout: 15000 });
             if (!(await rsrpCheckbox.isChecked())) {
-                await rsrpCheckbox.scrollIntoViewIfNeeded();
-                await rsrpCheckbox.check({ force: true });
+                try {
+                    await rsrpCheckbox.scrollIntoViewIfNeeded({ timeout: 5000 });
+                } catch (e) {
+                    console.log('  - Warning: Scroll to RSRP timed out, attempting check anyway...');
+                }
+                await rsrpCheckbox.check({ force: true, timeout: 5000 });
             }
             await mediumWait(page);
 
