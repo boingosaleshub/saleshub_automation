@@ -351,7 +351,6 @@ app.post('/api/automate', async (req, res) => {
         const hasIndoorAndOutdoor = coverageTypes?.includes('Indoor & Outdoor');
 
         const screenshots = [];
-        const contentAreaSelector = '#ROOT-2521314 > div > div.v-verticallayout.v-layout.v-vertical.v-widget.v-has-width.v-has-height > div > div:nth-child(2) > div > div.v-splitpanel-horizontal.v-widget.v-has-width.v-has-height > div > div.v-splitpanel-second-container.v-scrollable';
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
 
@@ -393,43 +392,41 @@ app.post('/api/automate', async (req, res) => {
 
             // Zoom
             console.log('Step 11: Clicking zoom-in button twice...');
-            const zoomButtonSelector = '#ROOT-2521314 > div > div.v-verticallayout.v-layout.v-vertical.v-widget.v-has-width.v-has-height > div > div:nth-child(2) > div > div.v-splitpanel-horizontal.v-widget.v-has-width.v-has-height > div > div.v-splitpanel-second-container.v-scrollable > div > div > div > div:nth-child(1) > div > div.v-panel-content.v-scrollable > div > div > div > div:nth-child(1) > div > div > div > div:nth-child(1) > div > div > div:nth-child(1) > div';
+            // Robust class-based selector for Zoom button (FontAwesome icon inside button)
+            const zoomButtonSelector = 'div.v-button.v-widget span.v-icon.FontAwesome';
             try {
-                const zoomButton = page.locator(zoomButtonSelector);
+                const zoomButton = page.locator(zoomButtonSelector).first();
                 await zoomButton.waitFor({ state: 'visible', timeout: 10000 });
                 await humanClick(page, zoomButton);
                 await mediumWait(page);
                 await humanClick(page, zoomButton);
                 await mediumWait(page);
             } catch (e) {
+                console.log('Error clicking zoom button:', e.message);
                 try {
-                    const altZoomButton = page.locator('div.v-button.v-widget span.v-icon.FontAwesome').first();
-                    await humanClick(page, altZoomButton);
-                    await mediumWait(page);
-                    await humanClick(page, altZoomButton);
-                    await mediumWait(page);
+                    const mapContainer = page.locator('.v-splitpanel-second-container');
+                    const plusBtn = mapContainer.locator('.v-button').first();
+                    await plusBtn.click({ force: true });
                 } catch (e2) { }
             }
 
             // Collapse
-            const collapseButtonSelector = '#ROOT-2521314 > div > div.v-verticallayout.v-layout.v-vertical.v-widget.v-has-width.v-has-height > div > div:nth-child(2) > div > div.v-splitpanel-horizontal.v-widget.v-has-width.v-has-height > div > div.v-splitpanel-second-container.v-scrollable > div > div > div > div.v-absolutelayout-wrapper.v-absolutelayout-wrapper-expand-component > div > div > div > div';
+            console.log('Step 12: Clicking collapse button...');
+            const collapseButtonSelector = 'div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget';
             try {
-                const collapseButton = page.locator(collapseButtonSelector);
+                const collapseButton = page.locator(collapseButtonSelector).first();
                 await collapseButton.waitFor({ state: 'visible', timeout: 10000 });
                 await humanClick(page, collapseButton);
                 await mediumWait(page);
             } catch (e) {
-                try {
-                    const altCollapseButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();
-                    await humanClick(page, altCollapseButton);
-                    await mediumWait(page);
-                } catch (e2) { }
+                console.log('Error clicking collapse button:', e.message);
             }
 
             // Screenshot
+            console.log('Step 13: Taking Indoor screenshot...');
             try {
                 await mediumWait(page);
-                const contentArea = page.locator(contentAreaSelector);
+                const contentArea = page.locator('.v-splitpanel-second-container.v-scrollable');
                 await contentArea.waitFor({ state: 'visible', timeout: 10000 });
                 const buffer = await contentArea.screenshot({ type: 'png' });
                 screenshots.push({
@@ -445,6 +442,7 @@ app.post('/api/automate', async (req, res) => {
                         filename: `ookla_INDOOR_fullpage_${sanitizedAddress}_${timestamp}.png`,
                         buffer: buffer.toString('base64')
                     });
+                    console.log('✓ Indoor fallback screenshot captured');
                 } catch (e2) { }
             }
         }
@@ -467,7 +465,7 @@ app.post('/api/automate', async (req, res) => {
                 await outdoorViewOption.click();
                 console.log('✓ Outdoor View selected');
                 await mediumWait(page);
-                await longWait(page); // Wait for map to update
+                await longWait(page);
 
             } catch (error) {
                 console.log('Error selecting Outdoor View:', error.message);
@@ -475,7 +473,7 @@ app.post('/api/automate', async (req, res) => {
 
             try {
                 await mediumWait(page);
-                const contentArea = page.locator(contentAreaSelector);
+                const contentArea = page.locator('.v-splitpanel-second-container.v-scrollable');
                 await contentArea.waitFor({ state: 'visible', timeout: 10000 });
                 const buffer = await contentArea.screenshot({ type: 'png' });
                 screenshots.push({
@@ -490,6 +488,7 @@ app.post('/api/automate', async (req, res) => {
                         filename: `ookla_OUTDOOR_fullpage_${sanitizedAddress}_${timestamp}.png`,
                         buffer: buffer.toString('base64')
                     });
+                    console.log('✓ Outdoor fallback screenshot captured');
                 } catch (e2) { }
             }
         }
@@ -524,7 +523,7 @@ app.post('/api/automate', async (req, res) => {
 
             try {
                 await mediumWait(page);
-                const contentArea = page.locator(contentAreaSelector);
+                const contentArea = page.locator('.v-splitpanel-second-container.v-scrollable');
                 await contentArea.waitFor({ state: 'visible', timeout: 10000 });
                 const buffer = await contentArea.screenshot({ type: 'png' });
                 screenshots.push({
