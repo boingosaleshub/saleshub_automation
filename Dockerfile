@@ -1,5 +1,5 @@
 # Use Playwright's official Docker image which has browsers pre-installed
-FROM mcr.microsoft.com/playwright:v1.57.0-focal
+FROM mcr.microsoft.com/playwright:v1.57.0-noble
 
 # Set working directory
 WORKDIR /app
