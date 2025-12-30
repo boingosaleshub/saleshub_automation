@@ -1,0 +1,30 @@
+{
+    "name": "boingo-playwright-automation",
+    "version": "1.0.0",
+    "description": "Playwright automation backend for Boingo SalesHub - Ookla Cell Analytics screenshots and future automations",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node server.js"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "cors": "^2.8.5",
+        "playwright": "^1.57.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/boingosaleshub/playwright-automation.git"
+    },
+    "keywords": [
+        "playwright",
+        "automation",
+        "ookla",
+        "boingo"
+    ],
+    "author": "Boingo SalesHub Team",
+    "license": "UNLICENSED"
+}

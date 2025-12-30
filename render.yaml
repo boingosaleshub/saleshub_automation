@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: playwright-automation
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        value: https://saleshubv3-frontend.vercel.app
