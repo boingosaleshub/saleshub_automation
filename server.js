@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const compression = require('compression');
 const { chromium } = require('playwright');
 
 const app = express();
@@ -15,7 +14,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(compression()); // Add compression for large responses
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -85,41 +83,100 @@ async function longWait(page) {
 
 async function selectView(page, viewName) {
     console.log(`  Selecting ${viewName}...`);
-    try {
-        let dropdown = page.locator('div.v-filterselect:has(img[src*="inandoutdoor"])').first();
-        if (await dropdown.count() === 0) {
-            dropdown = page.locator('div.v-filterselect.map-cb').first();
+
+    // Try up to 3 times
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            if (attempt > 1) {
+                console.log(`    Attempt ${attempt}/3...`);
+                await page.waitForTimeout(1000);
+            }
+
+            // Find dropdown
+            let dropdown = page.locator('div.v-filterselect:has(img[src*="inandoutdoor"])').first();
+            if (await dropdown.count() === 0) {
+                dropdown = page.locator('div.v-filterselect.map-cb').first();
+            }
+            if (await dropdown.count() === 0) {
+                dropdown = page.locator('div.v-filterselect').first();
+            }
+
+            await dropdown.waitFor({ state: 'visible', timeout: 10000 });
+
+            // Click dropdown button
+            const button = dropdown.locator('div.v-filterselect-button');
+            await button.click({ force: true });
+            await page.waitForTimeout(800);
+
+            // Wait for options list
+            await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
+                state: 'visible',
+                timeout: 8000
+            });
+
+            // Wait a bit for options to fully render
+            await page.waitForTimeout(300);
+
+            // Try multiple ways to find the option
+            let option = null;
+
+            // Method 1: Find span with exact text inside td
+            option = page.locator(`#VAADIN_COMBOBOX_OPTIONLIST td span:has-text("${viewName}")`).first();
+            if (await option.count() === 0) {
+                // Method 2: Find td that contains span with text
+                option = page.locator(`#VAADIN_COMBOBOX_OPTIONLIST td:has(span:has-text("${viewName}"))`).first();
+            }
+            if (await option.count() === 0) {
+                // Method 3: Case-insensitive span match
+                option = page.locator(`#VAADIN_COMBOBOX_OPTIONLIST span`).filter({ hasText: new RegExp(viewName, 'i') }).first();
+            }
+            if (await option.count() === 0) {
+                // Method 4: Partial match on first word
+                const partialName = viewName.split(' ')[0]; // "Indoor", "Outdoor"
+                option = page.locator(`#VAADIN_COMBOBOX_OPTIONLIST span`).filter({ hasText: new RegExp(partialName, 'i') }).first();
+            }
+
+            if (await option.count() === 0) {
+                throw new Error(`Could not find option "${viewName}" in dropdown`);
+            }
+
+            await option.waitFor({ state: 'visible', timeout: 5000 });
+
+            // Click the parent td if we found a span
+            const tagName = await option.evaluate(el => el.tagName.toLowerCase());
+            if (tagName === 'span') {
+                const parentTd = option.locator('..');
+                await parentTd.click({ force: true });
+            } else {
+                await option.click({ force: true });
+            }
+
+            console.log(`    ✓ ${viewName} selected`);
+
+            // Wait for map to update
+            await page.waitForTimeout(2000);
+            await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
+            await page.waitForTimeout(1000);
+
+            return true;
+
+        } catch (error) {
+            console.log(`    Attempt ${attempt} failed: ${error.message}`);
+
+            // Close any open dropdowns before retry
+            try {
+                await page.keyboard.press('Escape');
+                await page.waitForTimeout(500);
+            } catch (e) { }
+
+            if (attempt === 3) {
+                console.error(`    ✗ Failed to select ${viewName} after 3 attempts`);
+                return false;
+            }
         }
-        if (await dropdown.count() === 0) {
-            dropdown = page.locator('div.v-filterselect').first();
-        }
-
-        await dropdown.waitFor({ state: 'visible', timeout: 10000 });
-        const button = dropdown.locator('div.v-filterselect-button');
-        await button.click({ force: true });
-        await page.waitForTimeout(500);
-
-        await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
-            state: 'visible',
-            timeout: 5000
-        });
-
-        const option = page.locator(`#VAADIN_COMBOBOX_OPTIONLIST td:has-text("${viewName}")`).first();
-        await option.waitFor({ state: 'visible', timeout: 5000 });
-        await option.click();
-
-        console.log(`    ✓ ${viewName} selected`);
-
-        // Wait for map to update
-        await page.waitForTimeout(2000);
-        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
-        await page.waitForTimeout(1000);
-
-        return true;
-    } catch (error) {
-        console.error(`    Error selecting ${viewName}:`, error.message);
-        return false;
     }
+
+    return false;
 }
 
 async function takeScreenshot(page, viewType, sanitizedAddress, timestamp) {
@@ -443,25 +500,47 @@ app.post('/api/automate', async (req, res) => {
             if (await selectView(page, 'Indoor View')) {
                 const screenshot = await takeScreenshot(page, 'INDOOR', sanitizedAddress, timestamp);
                 screenshots.push(screenshot);
+            } else {
+                console.log('  ⚠ Skipping Indoor screenshot - view selection failed');
             }
         }
 
         // Outdoor View
         if (hasOutdoor) {
             console.log('Step 13: Outdoor View...');
+
+            // Debug: Log available options
+            try {
+                const dropdown = page.locator('div.v-filterselect').first();
+                await dropdown.locator('div.v-filterselect-button').click({ force: true });
+                await page.waitForTimeout(1000);
+                const spans = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST span').allTextContents();
+                console.log('  Available view options:', spans);
+                await page.keyboard.press('Escape');
+                await page.waitForTimeout(500);
+            } catch (e) {
+                console.log('  Could not list options:', e.message);
+            }
+
             if (await selectView(page, 'Outdoor View')) {
                 const screenshot = await takeScreenshot(page, 'OUTDOOR', sanitizedAddress, timestamp);
                 screenshots.push(screenshot);
+            } else {
+                console.log('  ⚠ Skipping Outdoor screenshot - view selection failed');
             }
         }
 
         // Indoor & Outdoor View
         if (hasIndoorAndOutdoor) {
-            console.log('Step 14: Indoor & Outdoor View...');
-            const viewNames = ['Outdoor & Indoor', 'Outdoor &amp; Indoor', 'Indoor & Outdoor'];
-            let success = false;
+            console.log('Step 14: Outdoor & Indoor View...');
 
-            for (const viewName of viewNames) {
+            // Try multiple possible names
+            const possibleNames = [
+                'Outdoor & Indoor',
+            ];
+
+            let success = false;
+            for (const viewName of possibleNames) {
                 if (await selectView(page, viewName)) {
                     success = true;
                     break;
@@ -471,6 +550,8 @@ app.post('/api/automate', async (req, res) => {
             if (success) {
                 const screenshot = await takeScreenshot(page, 'OUTDOOR_INDOOR', sanitizedAddress, timestamp);
                 screenshots.push(screenshot);
+            } else {
+                console.log('  ⚠ Skipping Indoor & Outdoor screenshot - view selection failed');
             }
         }
 
