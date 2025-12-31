@@ -236,43 +236,65 @@ async function selectView(page, viewName) {
 async function takeScreenshot(page, viewType, sanitizedAddress, timestamp) {
     console.log(`  Taking ${viewType} screenshot...`);
     try {
-        // Wait for network to be idle
-        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {
-            console.log('    - Network not idle, proceeding anyway...');
+        // Wait longer for page to stabilize after sidebar collapse
+        await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {
+            console.log('    - Network not idle after 20s, proceeding anyway...');
         });
 
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000); // Give extra time for rendering
 
-        // Try multiple selectors
+        // Try multiple selectors - after sidebar collapse, structure may change
         const selectors = [
+            '.v-splitpanel-second-container',  // Try without .v-scrollable first
             '.v-splitpanel-second-container.v-scrollable',
-            '.v-splitpanel-second-container',
             '.leaflet-container',
+            '.v-ui .v-scrollable',
+            'div[class*="splitpanel"]',
             '.v-ui'
         ];
 
         let contentArea = null;
+        let usedSelector = null;
+        
         for (const selector of selectors) {
             const element = page.locator(selector).first();
-            if (await element.count() > 0) {
+            const count = await element.count();
+            if (count > 0) {
                 contentArea = element;
-                console.log(`    ✓ Using selector: ${selector}`);
+                usedSelector = selector;
+                console.log(`    ✓ Found element with selector: ${selector}`);
                 break;
             }
         }
 
         if (!contentArea) {
-            throw new Error('No suitable screenshot element found');
+            console.log('    No specific element found, using full page screenshot');
+            // Just take full page screenshot
+            const buffer = await page.screenshot({
+                type: 'png',
+                fullPage: false,
+                timeout: 30000
+            });
+
+            const sizeKB = (buffer.length / 1024).toFixed(2);
+            console.log(`    ✓ Full page screenshot: ${sizeKB} KB`);
+
+            return {
+                filename: `ookla_${viewType}_${sanitizedAddress}_${timestamp}.png`,
+                buffer: buffer.toString('base64'),
+                size: sizeKB
+            };
         }
 
-        await contentArea.waitFor({ state: 'visible', timeout: 10000 });
+        // Try to take screenshot of the element
+        // Don't wait for visibility - just try to screenshot
         const buffer = await contentArea.screenshot({
             type: 'png',
             timeout: 30000
         });
 
         const sizeKB = (buffer.length / 1024).toFixed(2);
-        console.log(`    ✓ Screenshot captured: ${sizeKB} KB`);
+        console.log(`    ✓ Screenshot captured (${usedSelector}): ${sizeKB} KB`);
 
         return {
             filename: `ookla_${viewType}_${sanitizedAddress}_${timestamp}.png`,
@@ -281,21 +303,22 @@ async function takeScreenshot(page, viewType, sanitizedAddress, timestamp) {
         };
 
     } catch (error) {
-        console.log(`    Error with primary method: ${error.message}`);
-        console.log('    Trying full-page fallback...');
+        console.log(`    Error with element screenshot: ${error.message}`);
+        console.log('    Trying full viewport screenshot...');
 
         try {
+            // Take full viewport screenshot without clipping
             const buffer = await page.screenshot({
                 type: 'png',
-                clip: { x: 0, y: 50, width: 1280, height: 670 },
+                fullPage: false,
                 timeout: 30000
             });
 
             const sizeKB = (buffer.length / 1024).toFixed(2);
-            console.log(`    ✓ Fallback screenshot: ${sizeKB} KB`);
+            console.log(`    ✓ Viewport screenshot: ${sizeKB} KB`);
 
             return {
-                filename: `ookla_${viewType}_fullpage_${sanitizedAddress}_${timestamp}.png`,
+                filename: `ookla_${viewType}_viewport_${sanitizedAddress}_${timestamp}.png`,
                 buffer: buffer.toString('base64'),
                 size: sizeKB
             };
