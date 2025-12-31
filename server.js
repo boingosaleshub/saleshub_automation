@@ -89,30 +89,105 @@ async function selectView(page, viewName) {
         try {
             if (attempt > 1) {
                 console.log(`    Attempt ${attempt}/3...`);
-                await page.waitForTimeout(1000);
+                await page.waitForTimeout(1500);
             }
 
-            // Find the input field for view selection (it's a readonly input that triggers dropdown)
-            const dropdownInput = page.locator('input.v-filterselect-input.v-filterselect-input-readonly').first();
+            // Multiple selectors for the dropdown - try each one
+            const dropdownSelectors = [
+                'input.v-filterselect-input.v-filterselect-input-readonly',
+                'div.v-filterselect input[readonly]',
+                'div.v-filterselect input',
+                '.v-filterselect input.v-filterselect-input',
+                'input[class*="filterselect"][readonly]'
+            ];
 
-            if (await dropdownInput.count() === 0) {
-                throw new Error('Could not find view dropdown input field');
+            let dropdownInput = null;
+            let foundSelector = null;
+
+            for (const selector of dropdownSelectors) {
+                const element = page.locator(selector).first();
+                const count = await element.count();
+                if (count > 0) {
+                    const isVisible = await element.isVisible().catch(() => false);
+                    if (isVisible) {
+                        dropdownInput = element;
+                        foundSelector = selector;
+                        console.log(`    Found dropdown with selector: ${selector}`);
+                        break;
+                    }
+                }
+            }
+
+            // If no visible input found, try clicking the dropdown button instead
+            if (!dropdownInput) {
+                console.log(`    No visible input found, trying dropdown button...`);
+                const buttonSelectors = [
+                    'div.v-filterselect-button',
+                    '.v-filterselect div[role="button"]',
+                    'div.v-filterselect > div:last-child'
+                ];
+
+                for (const selector of buttonSelectors) {
+                    const element = page.locator(selector).first();
+                    const count = await element.count();
+                    if (count > 0) {
+                        const isVisible = await element.isVisible().catch(() => false);
+                        if (isVisible) {
+                            dropdownInput = element;
+                            foundSelector = selector;
+                            console.log(`    Found dropdown button with selector: ${selector}`);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!dropdownInput) {
+                // Debug: Log all v-filterselect elements
+                const filterSelectCount = await page.locator('.v-filterselect').count();
+                console.log(`    Debug: Found ${filterSelectCount} .v-filterselect elements on page`);
+                throw new Error('Could not find any visible view dropdown element');
             }
 
             await dropdownInput.waitFor({ state: 'visible', timeout: 10000 });
 
             // Click the input to open dropdown
             await dropdownInput.click({ force: true });
-            await page.waitForTimeout(800);
+            await page.waitForTimeout(1000);
 
-            // Wait for options list
-            await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
-                state: 'visible',
-                timeout: 8000
-            });
+            // Wait for options list with retry
+            let optionListVisible = false;
+            for (let i = 0; i < 3; i++) {
+                try {
+                    await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
+                        state: 'visible',
+                        timeout: 5000
+                    });
+                    optionListVisible = true;
+                    break;
+                } catch (e) {
+                    if (i < 2) {
+                        console.log(`    Option list not visible, clicking dropdown again...`);
+                        await dropdownInput.click({ force: true });
+                        await page.waitForTimeout(1000);
+                    }
+                }
+            }
 
-            // Wait a bit for options to fully render
-            await page.waitForTimeout(300);
+            if (!optionListVisible) {
+                throw new Error('Dropdown options list did not appear after 3 clicks');
+            }
+
+            // Wait for options to fully render
+            await page.waitForTimeout(500);
+
+            // Debug: Log all available options
+            try {
+                const allOptions = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST span').allTextContents();
+                console.log(`    Available options: ${JSON.stringify(allOptions)}`);
+            } catch (e) {
+                console.log(`    Could not list options: ${e.message}`);
+            }
 
             // Try multiple ways to find the option
             let option = null;
@@ -464,39 +539,66 @@ app.post('/api/automate', async (req, res) => {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
 
-        // Zoom and collapse (do once)
-        if (hasIndoor || hasOutdoor || hasIndoorAndOutdoor) {
-            console.log('Step 10: Zooming in...');
+        // Helper function to zoom and collapse sidebar
+        async function prepareForScreenshot() {
+            console.log('  Zooming in...');
             try {
                 const zoomButton = page.locator('div.v-button.v-widget span.v-icon.FontAwesome').first();
                 await zoomButton.waitFor({ state: 'visible', timeout: 10000 });
                 await zoomButton.click({ force: true });
-                await page.waitForTimeout(800);
+                await page.waitForTimeout(600);
                 await zoomButton.click({ force: true });
-                await page.waitForTimeout(800);
-                console.log('  ✓ Zoomed in 2x');
+                await page.waitForTimeout(600);
+                console.log('    ✓ Zoomed in 2x');
             } catch (e) {
-                console.log('  Warning: Could not zoom');
+                console.log('    Warning: Could not zoom');
             }
 
-            console.log('Step 11: Collapsing sidebar...');
+            console.log('  Collapsing sidebar...');
             try {
                 const collapseButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();
                 await collapseButton.waitFor({ state: 'visible', timeout: 10000 });
                 await collapseButton.click({ force: true });
                 await page.waitForTimeout(800);
-                console.log('  ✓ Sidebar collapsed');
+                console.log('    ✓ Sidebar collapsed');
             } catch (e) {
-                console.log('  Warning: Could not collapse sidebar');
+                console.log('    Warning: Could not collapse sidebar');
             }
         }
 
+        // Helper function to expand sidebar back
+        async function expandSidebar() {
+            try {
+                const expandButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();
+                if (await expandButton.count() > 0) {
+                    await expandButton.click({ force: true });
+                    await page.waitForTimeout(800);
+                    console.log('    ✓ Sidebar expanded');
+                }
+            } catch (e) {
+                console.log('    Note: Could not expand sidebar');
+            }
+        }
+
+        let sidebarCollapsed = false;
+
         // Indoor View
         if (hasIndoor) {
-            console.log('Step 12: Indoor View...');
+            console.log('Step 10: Indoor View...');
+            // Select view FIRST while sidebar is expanded
             if (await selectView(page, 'Indoor View')) {
+                // Then prepare (zoom + collapse) and take screenshot
+                if (!sidebarCollapsed) {
+                    await prepareForScreenshot();
+                    sidebarCollapsed = true;
+                }
                 const screenshot = await takeScreenshot(page, 'INDOOR', sanitizedAddress, timestamp);
                 screenshots.push(screenshot);
+                // Expand sidebar for next view selection
+                if (hasOutdoor || hasIndoorAndOutdoor) {
+                    await expandSidebar();
+                    sidebarCollapsed = false;
+                }
             } else {
                 console.log('  ⚠ Skipping Indoor screenshot - view selection failed');
             }
@@ -504,24 +606,21 @@ app.post('/api/automate', async (req, res) => {
 
         // Outdoor View
         if (hasOutdoor) {
-            console.log('Step 13: Outdoor View...');
-
-            // Debug: Log available options
-            try {
-                const dropdown = page.locator('div.v-filterselect').first();
-                await dropdown.locator('div.v-filterselect-button').click({ force: true });
-                await page.waitForTimeout(1000);
-                const spans = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST span').allTextContents();
-                console.log('  Available view options:', spans);
-                await page.keyboard.press('Escape');
-                await page.waitForTimeout(500);
-            } catch (e) {
-                console.log('  Could not list options:', e.message);
-            }
-
+            console.log('Step 11: Outdoor View...');
+            // Select view FIRST while sidebar is expanded
             if (await selectView(page, 'Outdoor View')) {
+                // Then prepare (zoom + collapse) and take screenshot
+                if (!sidebarCollapsed) {
+                    await prepareForScreenshot();
+                    sidebarCollapsed = true;
+                }
                 const screenshot = await takeScreenshot(page, 'OUTDOOR', sanitizedAddress, timestamp);
                 screenshots.push(screenshot);
+                // Expand sidebar for next view selection
+                if (hasIndoorAndOutdoor) {
+                    await expandSidebar();
+                    sidebarCollapsed = false;
+                }
             } else {
                 console.log('  ⚠ Skipping Outdoor screenshot - view selection failed');
             }
@@ -529,14 +628,16 @@ app.post('/api/automate', async (req, res) => {
 
         // Indoor & Outdoor View
         if (hasIndoorAndOutdoor) {
-            console.log('Step 14: Indoor & Outdoor View...');
+            console.log('Step 12: Indoor & Outdoor View...');
 
             // Try multiple possible names
             const possibleNames = [
                 'Outdoor & Indoor',
                 'Indoor & Outdoor',
                 'Outdoor and Indoor',
-                'Indoor and Outdoor'
+                'Indoor and Outdoor',
+                'Indoor & Outdoor View',
+                'Outdoor & Indoor View'
             ];
 
             let success = false;
@@ -548,6 +649,11 @@ app.post('/api/automate', async (req, res) => {
             }
 
             if (success) {
+                // Then prepare (zoom + collapse) and take screenshot
+                if (!sidebarCollapsed) {
+                    await prepareForScreenshot();
+                    sidebarCollapsed = true;
+                }
                 const screenshot = await takeScreenshot(page, 'OUTDOOR_INDOOR', sanitizedAddress, timestamp);
                 screenshots.push(screenshot);
             } else {
