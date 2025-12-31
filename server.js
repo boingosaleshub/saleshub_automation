@@ -507,10 +507,76 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 6: Network Provider
         console.log('Step 6: Opening Network Provider...');
-        const networkProviderToggle = page.locator('text=Network Provider').locator('..').locator('span').first();
-        await networkProviderToggle.waitFor({ timeout: 30000 });
-        await networkProviderToggle.click({ force: true });
-        console.log('  ✓ Network Provider section opened');
+        
+        let networkProviderOpened = false;
+        
+        // Try multiple methods to open Network Provider
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (attempt > 1) {
+                    console.log(`  Attempt ${attempt}/3...`);
+                    await page.waitForTimeout(2000);
+                }
+                
+                // Method 1: Try the original selector
+                const toggle1 = page.locator('text=Network Provider').locator('..').locator('span').first();
+                if (await toggle1.count() > 0) {
+                    await toggle1.click({ force: true, timeout: 10000 });
+                    networkProviderOpened = true;
+                    console.log('  ✓ Network Provider section opened (method 1)');
+                    break;
+                }
+            } catch (e1) {
+                console.log(`  Method 1 failed: ${e1.message}`);
+                
+                try {
+                    // Method 2: Find by text and click parent row
+                    const toggle2 = page.locator('text=Network Provider').locator('..');
+                    if (await toggle2.count() > 0) {
+                        await toggle2.click({ force: true, timeout: 10000 });
+                        networkProviderOpened = true;
+                        console.log('  ✓ Network Provider section opened (method 2)');
+                        break;
+                    }
+                } catch (e2) {
+                    console.log(`  Method 2 failed: ${e2.message}`);
+                    
+                    try {
+                        // Method 3: Use evaluate to find and click
+                        const result = await page.evaluate(() => {
+                            const elements = document.querySelectorAll('*');
+                            for (const el of elements) {
+                                if (el.textContent && el.textContent.includes('Network Provider')) {
+                                    // Find the tree spacer/toggle
+                                    const toggle = el.querySelector('.v-treetable-treespacer, .v-treetable-node-closed, span');
+                                    if (toggle) {
+                                        toggle.click();
+                                        return { success: true, method: 'evaluate-toggle' };
+                                    }
+                                    // Or just click the element itself
+                                    el.click();
+                                    return { success: true, method: 'evaluate-element' };
+                                }
+                            }
+                            return { success: false };
+                        });
+                        
+                        if (result.success) {
+                            networkProviderOpened = true;
+                            console.log(`  ✓ Network Provider section opened (${result.method})`);
+                            break;
+                        }
+                    } catch (e3) {
+                        console.log(`  Method 3 failed: ${e3.message}`);
+                    }
+                }
+            }
+        }
+        
+        if (!networkProviderOpened) {
+            throw new Error('Could not open Network Provider section after 3 attempts');
+        }
+        
         await longWait(page);
 
         // Step 7: Carriers
@@ -587,10 +653,74 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 8: LTE
         console.log('Step 8: Opening LTE options...');
-        const lteToggle = page.locator('text=LTE').locator('..').locator('span').first();
-        await lteToggle.waitFor({ timeout: 30000 });
-        await lteToggle.click({ force: true });
-        console.log('  ✓ LTE section opened');
+        
+        let lteOpened = false;
+        
+        // Try multiple methods to open LTE
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (attempt > 1) {
+                    console.log(`  Attempt ${attempt}/3...`);
+                    await page.waitForTimeout(2000);
+                }
+                
+                // Method 1: Try the original selector
+                const toggle1 = page.locator('text=LTE').locator('..').locator('span').first();
+                if (await toggle1.count() > 0) {
+                    await toggle1.click({ force: true, timeout: 10000 });
+                    lteOpened = true;
+                    console.log('  ✓ LTE section opened (method 1)');
+                    break;
+                }
+            } catch (e1) {
+                console.log(`  Method 1 failed: ${e1.message}`);
+                
+                try {
+                    // Method 2: Find by text and click parent
+                    const toggle2 = page.locator('text=LTE').locator('..');
+                    if (await toggle2.count() > 0) {
+                        await toggle2.click({ force: true, timeout: 10000 });
+                        lteOpened = true;
+                        console.log('  ✓ LTE section opened (method 2)');
+                        break;
+                    }
+                } catch (e2) {
+                    console.log(`  Method 2 failed: ${e2.message}`);
+                    
+                    try {
+                        // Method 3: Use evaluate
+                        const result = await page.evaluate(() => {
+                            const elements = document.querySelectorAll('*');
+                            for (const el of elements) {
+                                if (el.textContent && el.textContent.trim() === 'LTE') {
+                                    const toggle = el.querySelector('.v-treetable-treespacer, .v-treetable-node-closed, span');
+                                    if (toggle) {
+                                        toggle.click();
+                                        return { success: true };
+                                    }
+                                    el.click();
+                                    return { success: true };
+                                }
+                            }
+                            return { success: false };
+                        });
+                        
+                        if (result.success) {
+                            lteOpened = true;
+                            console.log('  ✓ LTE section opened (evaluate)');
+                            break;
+                        }
+                    } catch (e3) {
+                        console.log(`  Method 3 failed: ${e3.message}`);
+                    }
+                }
+            }
+        }
+        
+        if (!lteOpened) {
+            throw new Error('Could not open LTE section after 3 attempts');
+        }
+        
         await longWait(page);
 
         // Step 9: RSRP
