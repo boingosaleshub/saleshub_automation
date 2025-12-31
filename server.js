@@ -669,6 +669,9 @@ app.post('/api/automate', async (req, res) => {
             if (!(await rsrpCheckbox.isChecked())) {
                 await rsrpCheckbox.check({ force: true });
                 console.log('  ✓ RSRP checkbox selected');
+                // Press Escape immediately to close any popup that might open
+                await page.keyboard.press('Escape').catch(() => {});
+                await page.waitForTimeout(300);
             }
             await mediumWait(page);
 
@@ -699,68 +702,12 @@ app.post('/api/automate', async (req, res) => {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
 
-        // Helper function to close any open popups/dialogs
+        // Helper function - SIMPLIFIED: just wait, don't try to close popups
+        // The popup closure was causing browser freeze on Render
         async function closeOpenPopups() {
-            console.log('  Closing any open popups...');
-            try {
-                // DON'T click Cancel buttons - they cause page freeze
-                // Instead, use keyboard and DOM manipulation
-                
-                // Method 1: Press Escape multiple times
-                console.log('    Pressing Escape keys...');
-                for (let i = 0; i < 5; i++) {
-                    await page.keyboard.press('Escape');
-                    await page.waitForTimeout(200);
-                }
-                
-                // Method 2: Use evaluate to forcefully remove popup elements from DOM
-                console.log('    Removing popup elements from DOM...');
-                await page.evaluate(() => {
-                    // Find and remove RSRP popup window
-                    const windows = document.querySelectorAll('.v-window, .v-window-modalitycurtain, [class*="window"]');
-                    windows.forEach(w => {
-                        if (w && w.parentNode) {
-                            w.style.display = 'none';
-                            w.remove();
-                        }
-                    });
-                    
-                    // Remove any overlay/curtain elements
-                    const overlays = document.querySelectorAll('.v-window-modalitycurtain, [class*="curtain"], [class*="overlay"]');
-                    overlays.forEach(o => {
-                        if (o && o.parentNode) {
-                            o.style.display = 'none';
-                            o.remove();
-                        }
-                    });
-                    
-                    // Find elements with "RSRP" text and hide their parent windows
-                    const allElements = document.querySelectorAll('*');
-                    allElements.forEach(el => {
-                        if (el.textContent && el.textContent.includes('RSRP')) {
-                            let parent = el.parentElement;
-                            while (parent) {
-                                if (parent.classList && (parent.classList.contains('v-window') || parent.classList.contains('v-panel'))) {
-                                    parent.style.display = 'none';
-                                    break;
-                                }
-                                parent = parent.parentElement;
-                            }
-                        }
-                    });
-                    
-                    console.log('Removed popup elements from DOM');
-                });
-                
-                console.log('    ✓ Popups closed via Escape + DOM removal');
-                
-                // Wait for page to stabilize
-                await page.waitForTimeout(2000);
-                
-            } catch (e) {
-                console.log('    Note: Error during popup close:', e.message);
-                // Continue anyway - don't let this block screenshot
-            }
+            console.log('  Waiting for page to settle...');
+            await page.waitForTimeout(2000);
+            console.log('    ✓ Page settled');
         }
 
         // Helper function to zoom and collapse sidebar
