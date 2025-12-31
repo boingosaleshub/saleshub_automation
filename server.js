@@ -89,53 +89,91 @@ async function selectView(page, viewName) {
         try {
             if (attempt > 1) {
                 console.log(`    Attempt ${attempt}/3...`);
-                await page.waitForTimeout(1500);
+                await page.waitForTimeout(2000);
+                // Press Escape to close any open dropdowns
+                await page.keyboard.press('Escape').catch(() => {});
+                await page.waitForTimeout(500);
             }
 
-            // CRITICAL: There are multiple dropdowns on the page!
-            // We need to find the VIEW dropdown, not the legend dropdown
-            // The legend dropdown shows: ["Prev","Gradient","Binned","Next"]
-            // The view dropdown shows: ["Indoor View", "Outdoor View", "Outdoor & Indoor"]
+            // Wait for page to be stable before trying dropdowns
+            await page.waitForTimeout(1000);
             
+            // Get all readonly dropdown inputs
             const allDropdowns = await page.locator('input.v-filterselect-input.v-filterselect-input-readonly').all();
             console.log(`    Found ${allDropdowns.length} readonly dropdowns on page`);
             
-            let dropdownInput = null;
-            let dropdownIndex = -1;
+            let viewDropdownFound = false;
             
             // Try each dropdown and check its contents
             for (let i = 0; i < allDropdowns.length; i++) {
                 const dropdown = allDropdowns[i];
-                const isVisible = await dropdown.isVisible().catch(() => false);
-                
-                if (!isVisible) {
-                    console.log(`    Dropdown ${i}: not visible, skipping`);
-                    continue;
-                }
                 
                 try {
-                    // Click to open this dropdown
-                    await dropdown.click({ force: true });
-                    await page.waitForTimeout(800);
+                    // First, scroll into view
+                    await dropdown.scrollIntoViewIfNeeded().catch(() => {});
+                    await page.waitForTimeout(300);
                     
-                    // Check if option list appears
-                    const optionListAppeared = await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
-                        state: 'visible',
-                        timeout: 3000
-                    }).then(() => true).catch(() => false);
-                    
-                    if (!optionListAppeared) {
-                        console.log(`    Dropdown ${i}: no option list appeared`);
+                    const isVisible = await dropdown.isVisible().catch(() => false);
+                    if (!isVisible) {
+                        console.log(`    Dropdown ${i}: not visible, skipping`);
                         continue;
                     }
                     
-                    await page.waitForTimeout(300);
+                    // Try multiple click methods
+                    let optionListOpened = false;
+                    
+                    // Method 1: Click the dropdown button (arrow next to input)
+                    try {
+                        const parent = await dropdown.locator('..').first();
+                        const button = await parent.locator('.v-filterselect-button, div[class*="button"]').first();
+                        if (await button.count() > 0) {
+                            await button.click({ force: true, timeout: 5000 });
+                            await page.waitForTimeout(1000);
+                        }
+                    } catch (e) {}
+                    
+                    // Check if option list appeared
+                    optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
+                    
+                    // Method 2: Click the input directly
+                    if (!optionListOpened) {
+                        await dropdown.click({ force: true, timeout: 5000 });
+                        await page.waitForTimeout(1000);
+                        optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
+                    }
+                    
+                    // Method 3: Use evaluate to click
+                    if (!optionListOpened) {
+                        await page.evaluate((idx) => {
+                            const inputs = document.querySelectorAll('input.v-filterselect-input.v-filterselect-input-readonly');
+                            if (inputs[idx]) {
+                                inputs[idx].click();
+                            }
+                        }, i);
+                        await page.waitForTimeout(1000);
+                        optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
+                    }
+                    
+                    // Method 4: Wait longer for option list
+                    if (!optionListOpened) {
+                        optionListOpened = await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
+                            state: 'visible',
+                            timeout: 5000
+                        }).then(() => true).catch(() => false);
+                    }
+                    
+                    if (!optionListOpened) {
+                        console.log(`    Dropdown ${i}: no option list appeared after all methods`);
+                        continue;
+                    }
+                    
+                    await page.waitForTimeout(500);
                     
                     // Get the options
                     const options = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST span').allTextContents();
-                    console.log(`    Dropdown ${i} options: ${JSON.stringify(options)}`);
+                    console.log(`    Dropdown ${i} options: ${JSON.stringify(options.slice(0, 5))}...`);
                     
-                    // Check if this is the VIEW dropdown (contains "View" or "Indoor" or "Outdoor")
+                    // Check if this is the VIEW dropdown
                     const isViewDropdown = options.some(opt => 
                         opt.includes('View') || 
                         opt.includes('Indoor') || 
@@ -144,27 +182,22 @@ async function selectView(page, viewName) {
                     
                     if (isViewDropdown) {
                         console.log(`    ✓ Found VIEW dropdown at index ${i}`);
-                        dropdownInput = dropdown;
-                        dropdownIndex = i;
-                        // Keep dropdown open for option selection
+                        viewDropdownFound = true;
+                        // Dropdown is open, proceed to select option
                         break;
                     } else {
-                        console.log(`    Dropdown ${i}: not the view dropdown (contains: ${options.join(', ')})`);
-                        // Close this dropdown
-                        await page.keyboard.press('Escape');
+                        console.log(`    Dropdown ${i}: not view dropdown`);
+                        await page.keyboard.press('Escape').catch(() => {});
                         await page.waitForTimeout(300);
                     }
                 } catch (e) {
-                    console.log(`    Dropdown ${i}: error checking - ${e.message}`);
-                    try {
-                        await page.keyboard.press('Escape');
-                        await page.waitForTimeout(300);
-                    } catch {}
+                    console.log(`    Dropdown ${i}: error - ${e.message}`);
+                    await page.keyboard.press('Escape').catch(() => {});
                 }
             }
 
-            if (!dropdownInput) {
-                throw new Error('Could not find the VIEW dropdown (found only legend/other dropdowns)');
+            if (!viewDropdownFound) {
+                throw new Error('Could not find VIEW dropdown');
             }
 
             // Dropdown is already open from the validation loop above
