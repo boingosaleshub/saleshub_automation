@@ -769,24 +769,46 @@ app.post('/api/automate', async (req, res) => {
                 // Try to find and close the RSRP legend popup
                 const cancelButtons = await page.locator('button:has-text("Cancel"), div.v-button:has-text("Cancel")').all();
                 if (cancelButtons.length > 0) {
+                    // Only click the FIRST visible Cancel button
+                    // (clicking multiple causes "detached from DOM" errors)
                     for (const btn of cancelButtons) {
                         const isVisible = await btn.isVisible().catch(() => false);
                         if (isVisible) {
-                            await btn.click({ force: true });
-                            await page.waitForTimeout(500);
+                            await btn.click({ force: true, timeout: 5000 });
                             console.log('    ✓ Closed popup via Cancel button');
+                            await page.waitForTimeout(1000); // Wait for popup to close
+                            break; // Stop after first successful click
                         }
                     }
                 }
                 
-                // Also try pressing Escape to close any dialogs
+                // Wait a bit for any animations
+                await page.waitForTimeout(500);
+                
+                // Click on the map area to ensure focus is away from any popups
+                try {
+                    // Click on the map container to remove focus from popup
+                    const mapArea = page.locator('.leaflet-container, .v-splitpanel-second-container').first();
+                    if (await mapArea.count() > 0) {
+                        await mapArea.click({ position: { x: 100, y: 100 }, timeout: 3000 });
+                        console.log('    ✓ Clicked map to remove focus');
+                        await page.waitForTimeout(500);
+                    }
+                } catch (e) {
+                    console.log('    Note: Could not click map area');
+                }
+                
+                // Press Escape multiple times to close any remaining dialogs
                 await page.keyboard.press('Escape');
                 await page.waitForTimeout(300);
-                await page.keyboard.press('Escape'); // Press twice to be sure
+                await page.keyboard.press('Escape');
                 await page.waitForTimeout(300);
                 console.log('    ✓ Pressed Escape to close dialogs');
+                
+                // Final wait to ensure everything is settled
+                await page.waitForTimeout(1000);
             } catch (e) {
-                console.log('    Note: No popups to close or error:', e.message);
+                console.log('    Note: Error during popup close:', e.message);
             }
         }
 
