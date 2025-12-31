@@ -632,6 +632,34 @@ app.post('/api/automate', async (req, res) => {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
 
+        // Helper function to close any open popups/dialogs
+        async function closeOpenPopups() {
+            console.log('  Closing any open popups...');
+            try {
+                // Try to find and close the RSRP legend popup
+                const cancelButtons = await page.locator('button:has-text("Cancel"), div.v-button:has-text("Cancel")').all();
+                if (cancelButtons.length > 0) {
+                    for (const btn of cancelButtons) {
+                        const isVisible = await btn.isVisible().catch(() => false);
+                        if (isVisible) {
+                            await btn.click({ force: true });
+                            await page.waitForTimeout(500);
+                            console.log('    ✓ Closed popup via Cancel button');
+                        }
+                    }
+                }
+                
+                // Also try pressing Escape to close any dialogs
+                await page.keyboard.press('Escape');
+                await page.waitForTimeout(300);
+                await page.keyboard.press('Escape'); // Press twice to be sure
+                await page.waitForTimeout(300);
+                console.log('    ✓ Pressed Escape to close dialogs');
+            } catch (e) {
+                console.log('    Note: No popups to close or error:', e.message);
+            }
+        }
+
         // Helper function to zoom and collapse sidebar
         async function prepareForScreenshot() {
             console.log('  Zooming in...');
@@ -657,6 +685,9 @@ app.post('/api/automate', async (req, res) => {
             } catch (e) {
                 console.log('    Warning: Could not collapse sidebar');
             }
+            
+            // Close any popups that might be open (like RSRP legend)
+            await closeOpenPopups();
         }
 
         // Helper function to expand sidebar back
