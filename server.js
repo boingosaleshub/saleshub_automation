@@ -446,39 +446,48 @@ app.post('/api/automate', async (req, res) => {
         // Step 5: Address
         console.log('Step 5: Entering address:', address);
         
-        // Try multiple selectors for the address input
-        const addressSelectors = [
-            'input.v-filterselect-input:not([readonly])',
-            'input[type="text"]:not([readonly])',
-            'input.v-textfield',
-            'input[type="text"]'
-        ];
-        
+        // The address search input is at the top of the page
+        // We need to avoid the view dropdown which also has v-filterselect-input class
         let addressInput = null;
-        for (const selector of addressSelectors) {
-            const element = page.locator(selector).first();
-            if (await element.count() > 0) {
-                const isVisible = await element.isVisible().catch(() => false);
-                if (isVisible) {
-                    addressInput = element;
-                    console.log(`  Found address input with: ${selector}`);
-                    break;
-                }
+        
+        // Try to find the search input by looking for the first visible text input
+        // that is NOT readonly (the view dropdown is readonly)
+        const allTextInputs = await page.locator('input[type="text"]').all();
+        console.log(`  Found ${allTextInputs.length} text inputs on page`);
+        
+        for (let i = 0; i < allTextInputs.length; i++) {
+            const input = allTextInputs[i];
+            const isVisible = await input.isVisible().catch(() => false);
+            const isReadonly = await input.getAttribute('readonly').catch(() => null);
+            
+            if (isVisible && !isReadonly) {
+                // This should be the address search input
+                addressInput = input;
+                console.log(`  Found address input at index ${i} (not readonly)`);
+                break;
             }
         }
         
         if (!addressInput) {
-            addressInput = page.locator('input[type="text"]').first();
-            console.log('  Using fallback: input[type="text"]');
+            // Fallback: just use the first non-readonly input
+            addressInput = page.locator('input[type="text"]:not([readonly])').first();
+            console.log('  Using fallback selector: input[type="text"]:not([readonly])');
         }
         
         await addressInput.waitFor({ state: 'visible', timeout: 15000 });
         
-        // Click to focus and clear existing content
-        await addressInput.click({ clickCount: 3 }); // Triple-click to select all
-        await page.waitForTimeout(300);
-        await addressInput.press('Backspace'); // Clear selected text
-        await page.waitForTimeout(200);
+        // Clear existing content and type new address
+        try {
+            // Try to clear the field first
+            await addressInput.fill(''); // Use fill to clear
+            await page.waitForTimeout(300);
+        } catch (e) {
+            console.log('  Could not clear with fill, trying triple-click');
+            await addressInput.click({ clickCount: 3 });
+            await page.waitForTimeout(300);
+            await addressInput.press('Backspace');
+            await page.waitForTimeout(200);
+        }
         
         // Type the address
         await humanTypeLocator(addressInput, address, page);
