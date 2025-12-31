@@ -92,102 +92,84 @@ async function selectView(page, viewName) {
                 await page.waitForTimeout(1500);
             }
 
-            // Multiple selectors for the dropdown - try each one
-            const dropdownSelectors = [
-                'input.v-filterselect-input.v-filterselect-input-readonly',
-                'div.v-filterselect input[readonly]',
-                'div.v-filterselect input',
-                '.v-filterselect input.v-filterselect-input',
-                'input[class*="filterselect"][readonly]'
-            ];
-
+            // CRITICAL: There are multiple dropdowns on the page!
+            // We need to find the VIEW dropdown, not the legend dropdown
+            // The legend dropdown shows: ["Prev","Gradient","Binned","Next"]
+            // The view dropdown shows: ["Indoor View", "Outdoor View", "Outdoor & Indoor"]
+            
+            const allDropdowns = await page.locator('input.v-filterselect-input.v-filterselect-input-readonly').all();
+            console.log(`    Found ${allDropdowns.length} readonly dropdowns on page`);
+            
             let dropdownInput = null;
-            let foundSelector = null;
-
-            for (const selector of dropdownSelectors) {
-                const element = page.locator(selector).first();
-                const count = await element.count();
-                if (count > 0) {
-                    const isVisible = await element.isVisible().catch(() => false);
-                    if (isVisible) {
-                        dropdownInput = element;
-                        foundSelector = selector;
-                        console.log(`    Found dropdown with selector: ${selector}`);
-                        break;
-                    }
+            let dropdownIndex = -1;
+            
+            // Try each dropdown and check its contents
+            for (let i = 0; i < allDropdowns.length; i++) {
+                const dropdown = allDropdowns[i];
+                const isVisible = await dropdown.isVisible().catch(() => false);
+                
+                if (!isVisible) {
+                    console.log(`    Dropdown ${i}: not visible, skipping`);
+                    continue;
                 }
-            }
-
-            // If no visible input found, try clicking the dropdown button instead
-            if (!dropdownInput) {
-                console.log(`    No visible input found, trying dropdown button...`);
-                const buttonSelectors = [
-                    'div.v-filterselect-button',
-                    '.v-filterselect div[role="button"]',
-                    'div.v-filterselect > div:last-child'
-                ];
-
-                for (const selector of buttonSelectors) {
-                    const element = page.locator(selector).first();
-                    const count = await element.count();
-                    if (count > 0) {
-                        const isVisible = await element.isVisible().catch(() => false);
-                        if (isVisible) {
-                            dropdownInput = element;
-                            foundSelector = selector;
-                            console.log(`    Found dropdown button with selector: ${selector}`);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!dropdownInput) {
-                // Debug: Log all v-filterselect elements
-                const filterSelectCount = await page.locator('.v-filterselect').count();
-                console.log(`    Debug: Found ${filterSelectCount} .v-filterselect elements on page`);
-                throw new Error('Could not find any visible view dropdown element');
-            }
-
-            await dropdownInput.waitFor({ state: 'visible', timeout: 10000 });
-
-            // Click the input to open dropdown
-            await dropdownInput.click({ force: true });
-            await page.waitForTimeout(1000);
-
-            // Wait for options list with retry
-            let optionListVisible = false;
-            for (let i = 0; i < 3; i++) {
+                
                 try {
-                    await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
+                    // Click to open this dropdown
+                    await dropdown.click({ force: true });
+                    await page.waitForTimeout(800);
+                    
+                    // Check if option list appears
+                    const optionListAppeared = await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
                         state: 'visible',
-                        timeout: 5000
-                    });
-                    optionListVisible = true;
-                    break;
-                } catch (e) {
-                    if (i < 2) {
-                        console.log(`    Option list not visible, clicking dropdown again...`);
-                        await dropdownInput.click({ force: true });
-                        await page.waitForTimeout(1000);
+                        timeout: 3000
+                    }).then(() => true).catch(() => false);
+                    
+                    if (!optionListAppeared) {
+                        console.log(`    Dropdown ${i}: no option list appeared`);
+                        continue;
                     }
+                    
+                    await page.waitForTimeout(300);
+                    
+                    // Get the options
+                    const options = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST span').allTextContents();
+                    console.log(`    Dropdown ${i} options: ${JSON.stringify(options)}`);
+                    
+                    // Check if this is the VIEW dropdown (contains "View" or "Indoor" or "Outdoor")
+                    const isViewDropdown = options.some(opt => 
+                        opt.includes('View') || 
+                        opt.includes('Indoor') || 
+                        opt.includes('Outdoor')
+                    );
+                    
+                    if (isViewDropdown) {
+                        console.log(`    ✓ Found VIEW dropdown at index ${i}`);
+                        dropdownInput = dropdown;
+                        dropdownIndex = i;
+                        // Keep dropdown open for option selection
+                        break;
+                    } else {
+                        console.log(`    Dropdown ${i}: not the view dropdown (contains: ${options.join(', ')})`);
+                        // Close this dropdown
+                        await page.keyboard.press('Escape');
+                        await page.waitForTimeout(300);
+                    }
+                } catch (e) {
+                    console.log(`    Dropdown ${i}: error checking - ${e.message}`);
+                    try {
+                        await page.keyboard.press('Escape');
+                        await page.waitForTimeout(300);
+                    } catch {}
                 }
             }
 
-            if (!optionListVisible) {
-                throw new Error('Dropdown options list did not appear after 3 clicks');
+            if (!dropdownInput) {
+                throw new Error('Could not find the VIEW dropdown (found only legend/other dropdowns)');
             }
 
-            // Wait for options to fully render
+            // Dropdown is already open from the validation loop above
+            // Just wait a bit for options to stabilize
             await page.waitForTimeout(500);
-
-            // Debug: Log all available options
-            try {
-                const allOptions = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST span').allTextContents();
-                console.log(`    Available options: ${JSON.stringify(allOptions)}`);
-            } catch (e) {
-                console.log(`    Could not list options: ${e.message}`);
-            }
 
             // Try multiple ways to find the option
             let option = null;
