@@ -92,20 +92,17 @@ async function selectView(page, viewName) {
                 await page.waitForTimeout(1000);
             }
 
-            // Find dropdown
-            let dropdown = page.locator('div.v-filterselect:has(img[src*="inandoutdoor"])').first();
-            if (await dropdown.count() === 0) {
-                dropdown = page.locator('div.v-filterselect.map-cb').first();
-            }
-            if (await dropdown.count() === 0) {
-                dropdown = page.locator('div.v-filterselect').first();
+            // Find the input field for view selection (it's a readonly input that triggers dropdown)
+            const dropdownInput = page.locator('input.v-filterselect-input.v-filterselect-input-readonly').first();
+
+            if (await dropdownInput.count() === 0) {
+                throw new Error('Could not find view dropdown input field');
             }
 
-            await dropdown.waitFor({ state: 'visible', timeout: 10000 });
+            await dropdownInput.waitFor({ state: 'visible', timeout: 10000 });
 
-            // Click dropdown button
-            const button = dropdown.locator('div.v-filterselect-button');
-            await button.click({ force: true });
+            // Click the input to open dropdown
+            await dropdownInput.click({ force: true });
             await page.waitForTimeout(800);
 
             // Wait for options list
@@ -532,11 +529,14 @@ app.post('/api/automate', async (req, res) => {
 
         // Indoor & Outdoor View
         if (hasIndoorAndOutdoor) {
-            console.log('Step 14: Outdoor & Indoor View...');
+            console.log('Step 14: Indoor & Outdoor View...');
 
             // Try multiple possible names
             const possibleNames = [
                 'Outdoor & Indoor',
+                'Indoor & Outdoor',
+                'Outdoor and Indoor',
+                'Indoor and Outdoor'
             ];
 
             let success = false;
@@ -559,21 +559,37 @@ app.post('/api/automate', async (req, res) => {
         console.log('='.repeat(60));
         console.log(`✓ All steps complete! (${duration}s)`);
         console.log(`Screenshots captured: ${screenshots.length}`);
-        console.log(`Total response size: ~${(JSON.stringify(screenshots).length / 1024).toFixed(2)} KB`);
+
+        // Log each screenshot details
+        screenshots.forEach((ss, idx) => {
+            console.log(`  ${idx + 1}. ${ss.filename} - ${ss.size} KB`);
+        });
+
+        const totalSizeKB = (JSON.stringify(screenshots).length / 1024).toFixed(2);
+        console.log(`Total response size: ~${totalSizeKB} KB`);
         console.log('='.repeat(60));
 
         await browser.close();
 
-        return res.json({
+        const response = {
             success: true,
             screenshots,
             duration: parseFloat(duration),
             count: screenshots.length
-        });
+        };
+
+        console.log('Sending response to frontend...');
+        return res.json(response);
 
     } catch (error) {
         console.error('Automation error:', error);
-        if (browser) await browser.close();
+        if (browser) {
+            try {
+                await browser.close();
+            } catch (e) {
+                console.error('Error closing browser:', e.message);
+            }
+        }
         return res.status(500).json({ success: false, error: error.message });
     }
 });
