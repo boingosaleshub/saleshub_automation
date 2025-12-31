@@ -445,15 +445,47 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 5: Address
         console.log('Step 5: Entering address:', address);
-        const addressInput = page.locator('input[type="text"]').first();
-        await addressInput.waitFor({ timeout: 10000 });
-        await humanClick(page, addressInput);
-        await shortWait(page);
-        await addressInput.press('Control+A');
-        await page.waitForTimeout(randomDelay(150, 300));
+        
+        // Try multiple selectors for the address input
+        const addressSelectors = [
+            'input.v-filterselect-input:not([readonly])',
+            'input[type="text"]:not([readonly])',
+            'input.v-textfield',
+            'input[type="text"]'
+        ];
+        
+        let addressInput = null;
+        for (const selector of addressSelectors) {
+            const element = page.locator(selector).first();
+            if (await element.count() > 0) {
+                const isVisible = await element.isVisible().catch(() => false);
+                if (isVisible) {
+                    addressInput = element;
+                    console.log(`  Found address input with: ${selector}`);
+                    break;
+                }
+            }
+        }
+        
+        if (!addressInput) {
+            addressInput = page.locator('input[type="text"]').first();
+            console.log('  Using fallback: input[type="text"]');
+        }
+        
+        await addressInput.waitFor({ state: 'visible', timeout: 15000 });
+        
+        // Click to focus and clear existing content
+        await addressInput.click({ clickCount: 3 }); // Triple-click to select all
+        await page.waitForTimeout(300);
+        await addressInput.press('Backspace'); // Clear selected text
+        await page.waitForTimeout(200);
+        
+        // Type the address
         await humanTypeLocator(addressInput, address, page);
         console.log('  ✓ Address entered');
         await mediumWait(page);
+        
+        // Press Enter to search
         await addressInput.press('Enter');
         console.log('  ✓ Enter pressed');
         await longWait(page);
@@ -474,20 +506,67 @@ app.post('/api/automate', async (req, res) => {
         console.log('Step 7: Configuring carriers...');
         for (const [userName, siteName] of Object.entries(allCarriers)) {
             try {
+                // Try multiple methods to find the carrier checkbox
+                let found = false;
+                
+                // Method 1: Find by label text
                 const carrierLabel = page.locator(`label:has-text("${siteName}")`).first();
-                await carrierLabel.waitFor({ state: 'visible', timeout: 5000 });
-                const carrierLabelFor = await carrierLabel.getAttribute('for');
-                const carrierCheckbox = page.locator(`#${carrierLabelFor}`);
-                const isChecked = await carrierCheckbox.isChecked();
-                const shouldBeChecked = carriersToSelect.includes(userName);
+                if (await carrierLabel.count() > 0) {
+                    await carrierLabel.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
+                    if (await carrierLabel.isVisible().catch(() => false)) {
+                        const carrierLabelFor = await carrierLabel.getAttribute('for');
+                        if (carrierLabelFor) {
+                            const carrierCheckbox = page.locator(`#${carrierLabelFor}`);
+                            const isChecked = await carrierCheckbox.isChecked().catch(() => false);
+                            const shouldBeChecked = carriersToSelect.includes(userName);
 
-                if (isChecked !== shouldBeChecked) {
-                    await carrierLabel.click();
-                    console.log(`  ${shouldBeChecked ? '✓ Checked' : '✗ Unchecked'} ${siteName}`);
-                    await shortWait(page);
+                            if (isChecked !== shouldBeChecked) {
+                                await carrierLabel.click({ force: true });
+                                console.log(`  ${shouldBeChecked ? '✓ Checked' : '✗ Unchecked'} ${siteName}`);
+                                await shortWait(page);
+                            } else {
+                                console.log(`  ${siteName} already ${isChecked ? 'checked' : 'unchecked'}`);
+                            }
+                            found = true;
+                        }
+                    }
+                }
+                
+                // Method 2: Use evaluate to find and click
+                if (!found) {
+                    const shouldBeChecked = carriersToSelect.includes(userName);
+                    const result = await page.evaluate(({ siteName, shouldCheck }) => {
+                        const labels = document.querySelectorAll('label');
+                        for (const label of labels) {
+                            if (label.textContent && label.textContent.includes(siteName.split(' ')[0])) {
+                                const forId = label.getAttribute('for');
+                                if (forId) {
+                                    const checkbox = document.getElementById(forId);
+                                    if (checkbox) {
+                                        const isChecked = checkbox.checked;
+                                        if (isChecked !== shouldCheck) {
+                                            label.click();
+                                            return { clicked: true, action: shouldCheck ? 'checked' : 'unchecked' };
+                                        }
+                                        return { clicked: false, already: isChecked ? 'checked' : 'unchecked' };
+                                    }
+                                }
+                            }
+                        }
+                        return { error: 'not found' };
+                    }, { siteName, shouldCheck: shouldBeChecked });
+                    
+                    if (result.clicked) {
+                        console.log(`  ✓ ${result.action} ${siteName} (via evaluate)`);
+                        await shortWait(page);
+                    } else if (result.already) {
+                        console.log(`  ${siteName} already ${result.already}`);
+                    } else {
+                        console.log(`  Warning: Could not find ${userName}`);
+                    }
                 }
             } catch (error) {
-                console.log(`  Warning: Could not configure ${userName}`);
+                console.log(`  Warning: Could not configure ${userName}: ${error.message}`);
             }
         }
         await mediumWait(page);
