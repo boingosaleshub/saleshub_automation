@@ -160,6 +160,34 @@ async function selectView(page, viewName) {
                         continue;
                     }
 
+                    // Check if dropdown is disabled or in a bad state
+                    const isInteractable = await dropdown.evaluate(el => {
+                        // Check if disabled
+                        if (el.disabled) return false;
+                        // Check if parent is disabled
+                        const parent = el.closest('.v-disabled');
+                        if (parent) return false;
+                        // Check computed style
+                        const style = window.getComputedStyle(el);
+                        if (style.pointerEvents === 'none') return false;
+                        return true;
+                    });
+
+                    if (!isInteractable) {
+                        console.log(`    Dropdown ${i}: not interactable (disabled or blocked), skipping`);
+                        continue;
+                    }
+
+                    // Remove any overlays that might block clicks
+                    await page.evaluate(() => {
+                        const overlays = document.querySelectorAll('.v-loading-indicator, .v-app-loading, [class*="overlay"]');
+                        overlays.forEach(o => {
+                            if (o.style) o.style.display = 'none';
+                        });
+                    });
+
+                    await page.waitForTimeout(200);
+
                     // Try multiple click methods
                     let optionListOpened = false;
 
@@ -169,7 +197,7 @@ async function selectView(page, viewName) {
                         const button = await parent.locator('.v-filterselect-button, div[class*="button"]').first();
                         if (await button.count() > 0) {
                             await button.click({ force: true, timeout: 5000 });
-                            await page.waitForTimeout(1000);
+                            await page.waitForTimeout(2000); // Increased from 1000ms
                         }
                     } catch (e) { }
 
@@ -179,7 +207,7 @@ async function selectView(page, viewName) {
                     // Method 2: Click the input directly
                     if (!optionListOpened) {
                         await dropdown.click({ force: true, timeout: 5000 });
-                        await page.waitForTimeout(1000);
+                        await page.waitForTimeout(2000); // Increased from 1000ms
                         optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
                     }
 
@@ -191,15 +219,15 @@ async function selectView(page, viewName) {
                                 inputs[idx].click();
                             }
                         }, i);
-                        await page.waitForTimeout(1000);
+                        await page.waitForTimeout(2000); // Increased from 1000ms
                         optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
                     }
 
-                    // Method 4: Wait longer for option list
+                    // Method 4: Wait longer for option list (page is very slow on Render)
                     if (!optionListOpened) {
                         optionListOpened = await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
                             state: 'visible',
-                            timeout: 5000
+                            timeout: 10000 // Increased from 5000ms
                         }).then(() => true).catch(() => false);
                     }
 
@@ -792,10 +820,15 @@ app.post('/api/automate', async (req, res) => {
         // Ensure no dialogs are present
         await forceCloseAllDialogs(page);
 
-        // RSRP dialog checking block removed in favor of proactive JS selection
-
-
-        await mediumWait(page);
+        // CRITICAL: Wait for page to fully stabilize after RSRP selection
+        // The page is very slow on Render and needs time to process
+        console.log('  Waiting for page to stabilize after RSRP...');
+        await page.waitForTimeout(3000); // Initial wait
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+            console.log('  Network not idle after 10s, continuing anyway...');
+        });
+        await page.waitForTimeout(2000); // Additional buffer
+        console.log('  ✓ Page stabilized');
 
         // ============== SCREENSHOTS ==============
 
