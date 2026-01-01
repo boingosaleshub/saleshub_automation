@@ -417,67 +417,36 @@ app.post('/api/automate', async (req, res) => {
                 console.log('  Note: Could not change to Day view');
             }
         }
-        
-        // Wait for page to reload after Day view change
-        console.log('  Waiting for page to reload after Day view change...');
-        await page.waitForTimeout(3000);
-        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
-            console.log('  Network not idle, continuing anyway...');
-        });
-        console.log('  ✓ Page reloaded');
 
         // Step 5: Address
         console.log('Step 5: Entering address:', address);
         
-        // Wait for map to be visible (indicates page is loaded)
-        try {
-            await page.waitForSelector('.leaflet-container', { state: 'visible', timeout: 10000 });
-            console.log('  ✓ Map loaded');
-        } catch (e) {
-            console.log('  Warning: Map not visible, continuing anyway...');
+        // The address search input is at the top of the page
+        // We need to avoid the view dropdown which also has v-filterselect-input class
+        let addressInput = null;
+        
+        // Try to find the search input by looking for the first visible text input
+        // that is NOT readonly (the view dropdown is readonly)
+        const allTextInputs = await page.locator('input[type="text"]').all();
+        console.log(`  Found ${allTextInputs.length} text inputs on page`);
+        
+        for (let i = 0; i < allTextInputs.length; i++) {
+            const input = allTextInputs[i];
+            const isVisible = await input.isVisible().catch(() => false);
+            const isReadonly = await input.getAttribute('readonly').catch(() => null);
+            
+            if (isVisible && !isReadonly) {
+                // This should be the address search input
+                addressInput = input;
+                console.log(`  Found address input at index ${i} (not readonly)`);
+                break;
+            }
         }
         
-        await page.waitForTimeout(2000); // Additional wait for inputs to appear
-        
-        // Use evaluate to find the address input directly in DOM
-        const addressInputInfo = await page.evaluate(() => {
-            // Try multiple selectors
-            const selectors = [
-                'input[type="text"]:not([readonly])',
-                'input.v-filterselect-input:not(.v-filterselect-input-readonly)',
-                'input[type="text"]',
-                'input.v-textfield'
-            ];
-            
-            for (const selector of selectors) {
-                const inputs = document.querySelectorAll(selector);
-                for (let i = 0; i < inputs.length; i++) {
-                    const input = inputs[i];
-                    const style = window.getComputedStyle(input);
-                    if (style.display !== 'none' && style.visibility !== 'hidden') {
-                        return {
-                            found: true,
-                            selector: selector,
-                            index: i,
-                            readonly: input.hasAttribute('readonly')
-                        };
-                    }
-                }
-            }
-            return { found: false };
-        });
-        
-        console.log('  Address input search result:', JSON.stringify(addressInputInfo));
-        
-        let addressInput;
-        if (addressInputInfo.found) {
-            // Use the selector and index found by evaluate
-            addressInput = page.locator(addressInputInfo.selector).nth(addressInputInfo.index);
-            console.log(`  ✓ Found address input: ${addressInputInfo.selector}[${addressInputInfo.index}]`);
-        } else {
-            // Last resort fallback
-            console.log('  Warning: Could not find address input via evaluate, using fallback');
-            addressInput = page.locator('input').first();
+        if (!addressInput) {
+            // Fallback: just use the first non-readonly input
+            addressInput = page.locator('input[type="text"]:not([readonly])').first();
+            console.log('  Using fallback selector: input[type="text"]:not([readonly])');
         }
         
         await addressInput.waitFor({ state: 'visible', timeout: 15000 });
@@ -806,76 +775,17 @@ app.post('/api/automate', async (req, res) => {
 
         // Helper function to zoom and collapse sidebar
         async function prepareForScreenshot() {
-            console.log('  Zooming in 4x...');
-            
-            // Try multiple methods to find and click zoom button
-            let zoomSuccess = false;
-            
+            console.log('  Zooming in...');
             try {
-                // Method 1: Try to find the + button specifically
-                try {
-                    const zoomInButton = page.locator('div.v-button:has(span.v-icon.FontAwesome)').filter({ hasText: '+' }).first();
-                    if (await zoomInButton.count() > 0) {
-                        for (let i = 0; i < 4; i++) {
-                            await zoomInButton.click({ force: true });
-                            await page.waitForTimeout(500);
-                        }
-                        zoomSuccess = true;
-                        console.log('    ✓ Zoomed in 4x (method 1)');
-                    }
-                } catch (e) {
-                    console.log('    Method 1 failed:', e.message);
-                }
-                
-                // Method 2: Try all zoom controls and find the + button
-                if (!zoomSuccess) {
-                    try {
-                        const allButtons = await page.locator('div.v-button.v-widget').all();
-                        for (const btn of allButtons) {
-                            const text = await btn.textContent().catch(() => '');
-                            if (text.includes('+')) {
-                                for (let i = 0; i < 4; i++) {
-                                    await btn.click({ force: true });
-                                    await page.waitForTimeout(500);
-                                }
-                                zoomSuccess = true;
-                                console.log('    ✓ Zoomed in 4x (method 2)');
-                                break;
-                            }
-                        }
-                    } catch (e) {
-                        console.log('    Method 2 failed:', e.message);
-                    }
-                }
-                
-                // Method 3: Use evaluate to find and click zoom button
-                if (!zoomSuccess) {
-                    try {
-                        await page.evaluate(() => {
-                            const buttons = document.querySelectorAll('div.v-button');
-                            for (const btn of buttons) {
-                                if (btn.textContent.includes('+')) {
-                                    for (let i = 0; i < 4; i++) {
-                                        btn.click();
-                                    }
-                                    return true;
-                                }
-                            }
-                            return false;
-                        });
-                        await page.waitForTimeout(2000); // Wait for zoom animation
-                        zoomSuccess = true;
-                        console.log('    ✓ Zoomed in 4x (method 3 - evaluate)');
-                    } catch (e) {
-                        console.log('    Method 3 failed:', e.message);
-                    }
-                }
-                
-                if (!zoomSuccess) {
-                    console.log('    Warning: Could not zoom - all methods failed');
-                }
+                const zoomButton = page.locator('div.v-button.v-widget span.v-icon.FontAwesome').first();
+                await zoomButton.waitFor({ state: 'visible', timeout: 10000 });
+                await zoomButton.click({ force: true });
+                await page.waitForTimeout(600);
+                await zoomButton.click({ force: true });
+                await page.waitForTimeout(600);
+                console.log('    ✓ Zoomed in 2x');
             } catch (e) {
-                console.log('    Warning: Could not zoom - outer error:', e.message);
+                console.log('    Warning: Could not zoom');
             }
 
             console.log('  Collapsing sidebar...');
