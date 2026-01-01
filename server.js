@@ -777,6 +777,23 @@ app.post('/api/automate', async (req, res) => {
         // Helper function - SIMPLIFIED: just wait, don't try to close popups
         // The popup closure was causing browser freeze on Render
         async function closeOpenPopups() {
+            // Check for and close RSRP configuration dialog if it appears late
+            try {
+                // Look for the dialog by title "RSRP"
+                const dialog = page.locator('div.v-window-contents').filter({ hasText: 'RSRP' }).first();
+                if (await dialog.isVisible()) {
+                    console.log('    ⚠ RSRP dialog detected before screenshot, closing...');
+                    const closeButton = page.locator('div.v-window-closebox');
+                    if (await closeButton.count() > 0 && await closeButton.isVisible()) {
+                        await closeButton.click();
+                        console.log('    ✓ Clicked "X" on RSRP dialog');
+                        await page.waitForTimeout(500);
+                    }
+                }
+            } catch (e) {
+                // Ignore errors here to prevent freezing
+            }
+
             console.log('  Waiting for page to settle...');
             await page.waitForTimeout(2000);
             console.log('    ✓ Page settled');
