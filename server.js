@@ -91,37 +91,37 @@ async function selectView(page, viewName) {
                 console.log(`    Attempt ${attempt}/3...`);
                 await page.waitForTimeout(2000);
                 // Press Escape to close any open dropdowns
-                await page.keyboard.press('Escape').catch(() => {});
+                await page.keyboard.press('Escape').catch(() => { });
                 await page.waitForTimeout(500);
             }
 
             // Wait for page to be stable before trying dropdowns
             await page.waitForTimeout(1000);
-            
+
             // Get all readonly dropdown inputs
             const allDropdowns = await page.locator('input.v-filterselect-input.v-filterselect-input-readonly').all();
             console.log(`    Found ${allDropdowns.length} readonly dropdowns on page`);
-            
+
             let viewDropdownFound = false;
-            
+
             // Try each dropdown and check its contents
             for (let i = 0; i < allDropdowns.length; i++) {
                 const dropdown = allDropdowns[i];
-                
+
                 try {
                     // First, scroll into view
-                    await dropdown.scrollIntoViewIfNeeded().catch(() => {});
+                    await dropdown.scrollIntoViewIfNeeded().catch(() => { });
                     await page.waitForTimeout(300);
-                    
+
                     const isVisible = await dropdown.isVisible().catch(() => false);
                     if (!isVisible) {
                         console.log(`    Dropdown ${i}: not visible, skipping`);
                         continue;
                     }
-                    
+
                     // Try multiple click methods
                     let optionListOpened = false;
-                    
+
                     // Method 1: Click the dropdown button (arrow next to input)
                     try {
                         const parent = await dropdown.locator('..').first();
@@ -130,18 +130,18 @@ async function selectView(page, viewName) {
                             await button.click({ force: true, timeout: 5000 });
                             await page.waitForTimeout(1000);
                         }
-                    } catch (e) {}
-                    
+                    } catch (e) { }
+
                     // Check if option list appeared
                     optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
-                    
+
                     // Method 2: Click the input directly
                     if (!optionListOpened) {
                         await dropdown.click({ force: true, timeout: 5000 });
                         await page.waitForTimeout(1000);
                         optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
                     }
-                    
+
                     // Method 3: Use evaluate to click
                     if (!optionListOpened) {
                         await page.evaluate((idx) => {
@@ -153,7 +153,7 @@ async function selectView(page, viewName) {
                         await page.waitForTimeout(1000);
                         optionListOpened = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST').isVisible().catch(() => false);
                     }
-                    
+
                     // Method 4: Wait longer for option list
                     if (!optionListOpened) {
                         optionListOpened = await page.waitForSelector('#VAADIN_COMBOBOX_OPTIONLIST', {
@@ -161,25 +161,25 @@ async function selectView(page, viewName) {
                             timeout: 5000
                         }).then(() => true).catch(() => false);
                     }
-                    
+
                     if (!optionListOpened) {
                         console.log(`    Dropdown ${i}: no option list appeared after all methods`);
                         continue;
                     }
-                    
+
                     await page.waitForTimeout(500);
-                    
+
                     // Get the options
                     const options = await page.locator('#VAADIN_COMBOBOX_OPTIONLIST span').allTextContents();
                     console.log(`    Dropdown ${i} options: ${JSON.stringify(options.slice(0, 5))}...`);
-                    
+
                     // Check if this is the VIEW dropdown
-                    const isViewDropdown = options.some(opt => 
-                        opt.includes('View') || 
-                        opt.includes('Indoor') || 
+                    const isViewDropdown = options.some(opt =>
+                        opt.includes('View') ||
+                        opt.includes('Indoor') ||
                         opt.includes('Outdoor')
                     );
-                    
+
                     if (isViewDropdown) {
                         console.log(`    ✓ Found VIEW dropdown at index ${i}`);
                         viewDropdownFound = true;
@@ -187,12 +187,12 @@ async function selectView(page, viewName) {
                         break;
                     } else {
                         console.log(`    Dropdown ${i}: not view dropdown`);
-                        await page.keyboard.press('Escape').catch(() => {});
+                        await page.keyboard.press('Escape').catch(() => { });
                         await page.waitForTimeout(300);
                     }
                 } catch (e) {
                     console.log(`    Dropdown ${i}: error - ${e.message}`);
-                    await page.keyboard.press('Escape').catch(() => {});
+                    await page.keyboard.press('Escape').catch(() => { });
                 }
             }
 
@@ -420,21 +420,21 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 5: Address
         console.log('Step 5: Entering address:', address);
-        
+
         // The address search input is at the top of the page
         // We need to avoid the view dropdown which also has v-filterselect-input class
         let addressInput = null;
-        
+
         // Try to find the search input by looking for the first visible text input
         // that is NOT readonly (the view dropdown is readonly)
         const allTextInputs = await page.locator('input[type="text"]').all();
         console.log(`  Found ${allTextInputs.length} text inputs on page`);
-        
+
         for (let i = 0; i < allTextInputs.length; i++) {
             const input = allTextInputs[i];
             const isVisible = await input.isVisible().catch(() => false);
             const isReadonly = await input.getAttribute('readonly').catch(() => null);
-            
+
             if (isVisible && !isReadonly) {
                 // This should be the address search input
                 addressInput = input;
@@ -442,15 +442,15 @@ app.post('/api/automate', async (req, res) => {
                 break;
             }
         }
-        
+
         if (!addressInput) {
             // Fallback: just use the first non-readonly input
             addressInput = page.locator('input[type="text"]:not([readonly])').first();
             console.log('  Using fallback selector: input[type="text"]:not([readonly])');
         }
-        
+
         await addressInput.waitFor({ state: 'visible', timeout: 15000 });
-        
+
         // Clear existing content and type new address
         try {
             // Try to clear the field first
@@ -463,12 +463,12 @@ app.post('/api/automate', async (req, res) => {
             await addressInput.press('Backspace');
             await page.waitForTimeout(200);
         }
-        
+
         // Type the address
         await humanTypeLocator(addressInput, address, page);
         console.log('  ✓ Address entered');
         await mediumWait(page);
-        
+
         // Press Enter to search
         await addressInput.press('Enter');
         console.log('  ✓ Enter pressed');
@@ -477,9 +477,9 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 6: Network Provider
         console.log('Step 6: Opening Network Provider...');
-        
+
         let networkProviderOpened = false;
-        
+
         // Try multiple methods to open Network Provider
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
@@ -487,7 +487,7 @@ app.post('/api/automate', async (req, res) => {
                     console.log(`  Attempt ${attempt}/3...`);
                     await page.waitForTimeout(2000);
                 }
-                
+
                 // Method 1: Try the original selector
                 const toggle1 = page.locator('text=Network Provider').locator('..').locator('span').first();
                 if (await toggle1.count() > 0) {
@@ -498,7 +498,7 @@ app.post('/api/automate', async (req, res) => {
                 }
             } catch (e1) {
                 console.log(`  Method 1 failed: ${e1.message}`);
-                
+
                 try {
                     // Method 2: Find by text and click parent row
                     const toggle2 = page.locator('text=Network Provider').locator('..');
@@ -510,7 +510,7 @@ app.post('/api/automate', async (req, res) => {
                     }
                 } catch (e2) {
                     console.log(`  Method 2 failed: ${e2.message}`);
-                    
+
                     try {
                         // Method 3: Use evaluate to find and click
                         const result = await page.evaluate(() => {
@@ -530,7 +530,7 @@ app.post('/api/automate', async (req, res) => {
                             }
                             return { success: false };
                         });
-                        
+
                         if (result.success) {
                             networkProviderOpened = true;
                             console.log(`  ✓ Network Provider section opened (${result.method})`);
@@ -542,11 +542,11 @@ app.post('/api/automate', async (req, res) => {
                 }
             }
         }
-        
+
         if (!networkProviderOpened) {
             throw new Error('Could not open Network Provider section after 3 attempts');
         }
-        
+
         await longWait(page);
 
         // Step 7: Carriers
@@ -558,11 +558,11 @@ app.post('/api/automate', async (req, res) => {
             try {
                 // Try multiple methods to find the carrier checkbox
                 let found = false;
-                
+
                 // Method 1: Find by label text
                 const carrierLabel = page.locator(`label:has-text("${siteName}")`).first();
                 if (await carrierLabel.count() > 0) {
-                    await carrierLabel.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
+                    await carrierLabel.waitFor({ state: 'visible', timeout: 3000 }).catch(() => { });
                     if (await carrierLabel.isVisible().catch(() => false)) {
                         const carrierLabelFor = await carrierLabel.getAttribute('for');
                         if (carrierLabelFor) {
@@ -581,7 +581,7 @@ app.post('/api/automate', async (req, res) => {
                         }
                     }
                 }
-                
+
                 // Method 2: Use evaluate to find and click
                 if (!found) {
                     const shouldBeChecked = carriersToSelect.includes(userName);
@@ -605,7 +605,7 @@ app.post('/api/automate', async (req, res) => {
                         }
                         return { error: 'not found' };
                     }, { siteName, shouldCheck: shouldBeChecked });
-                    
+
                     if (result.clicked) {
                         console.log(`  ✓ ${result.action} ${siteName} (via evaluate)`);
                         await shortWait(page);
@@ -623,9 +623,9 @@ app.post('/api/automate', async (req, res) => {
 
         // Step 8: LTE
         console.log('Step 8: Opening LTE options...');
-        
+
         let lteOpened = false;
-        
+
         // Try multiple methods to open LTE
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
@@ -633,7 +633,7 @@ app.post('/api/automate', async (req, res) => {
                     console.log(`  Attempt ${attempt}/3...`);
                     await page.waitForTimeout(2000);
                 }
-                
+
                 // Method 1: Try the original selector
                 const toggle1 = page.locator('text=LTE').locator('..').locator('span').first();
                 if (await toggle1.count() > 0) {
@@ -644,7 +644,7 @@ app.post('/api/automate', async (req, res) => {
                 }
             } catch (e1) {
                 console.log(`  Method 1 failed: ${e1.message}`);
-                
+
                 try {
                     // Method 2: Find by text and click parent
                     const toggle2 = page.locator('text=LTE').locator('..');
@@ -656,7 +656,7 @@ app.post('/api/automate', async (req, res) => {
                     }
                 } catch (e2) {
                     console.log(`  Method 2 failed: ${e2.message}`);
-                    
+
                     try {
                         // Method 3: Use evaluate
                         const result = await page.evaluate(() => {
@@ -674,7 +674,7 @@ app.post('/api/automate', async (req, res) => {
                             }
                             return { success: false };
                         });
-                        
+
                         if (result.success) {
                             lteOpened = true;
                             console.log('  ✓ LTE section opened (evaluate)');
@@ -686,11 +686,11 @@ app.post('/api/automate', async (req, res) => {
                 }
             }
         }
-        
+
         if (!lteOpened) {
             throw new Error('Could not open LTE section after 3 attempts');
         }
-        
+
         await longWait(page);
 
         // Step 9: RSRP
@@ -703,7 +703,7 @@ app.post('/api/automate', async (req, res) => {
                 await rsrpCheckbox.check({ force: true });
                 console.log('  ✓ RSRP checkbox selected');
                 // Press Escape immediately to close any popup that might open
-                await page.keyboard.press('Escape').catch(() => {});
+                await page.keyboard.press('Escape').catch(() => { });
                 await page.waitForTimeout(300);
             }
             await mediumWait(page);
@@ -723,6 +723,45 @@ app.post('/api/automate', async (req, res) => {
         } catch (error) {
             console.log('  Error with RSRP selection:', error.message);
         }
+
+        // Check for and close RSRP configuration dialog if it appears
+        try {
+            console.log('  Checking for unwanted RSRP dialog...');
+            // Look for the dialog by title "RSRP" or potentially just the close button
+
+            // Wait briefly to see if it pops up
+            const dialog = page.locator('div.v-window-contents').filter({ hasText: 'RSRP' }).first();
+
+            if (await dialog.count() > 0 && await dialog.isVisible()) {
+                console.log('  ✓ RSRP dialog detected');
+
+                // Try "Cancel" button first
+                const cancelButton = dialog.locator('button', { hasText: 'Cancel' }).or(dialog.locator('.v-button:has-text("Cancel")'));
+                if (await cancelButton.count() > 0 && await cancelButton.isVisible()) {
+                    await cancelButton.click();
+                    console.log('  ✓ Clicked "Cancel" on RSRP dialog');
+                } else {
+                    // Try waiting for close button (X)
+                    const closeButton = page.locator('div.v-window-closebox');
+                    if (await closeButton.count() > 0 && await closeButton.isVisible()) {
+                        await closeButton.click();
+                        console.log('  ✓ Clicked "X" on RSRP dialog');
+                    }
+                }
+
+                await page.waitForTimeout(500);
+            } else {
+                // Try looking for just the cancel button in a v-window
+                const cancelBtn = page.locator('div.v-window .v-button-caption:has-text("Cancel")').first();
+                if (await cancelBtn.count() > 0 && await cancelBtn.isVisible()) {
+                    await cancelBtn.click();
+                    console.log('  ✓ Clicked "Cancel" button (fallback)');
+                }
+            }
+        } catch (e) {
+            console.log('  Note: Error checking RSRP dialog (can ignore):', e.message);
+        }
+
         await mediumWait(page);
 
         // ============== SCREENSHOTS ==============
@@ -768,7 +807,7 @@ app.post('/api/automate', async (req, res) => {
             } catch (e) {
                 console.log('    Warning: Could not collapse sidebar');
             }
-            
+
             // Close any popups that might be open (like RSRP legend)
             await closeOpenPopups();
         }
