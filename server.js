@@ -417,6 +417,14 @@ app.post('/api/automate', async (req, res) => {
                 console.log('  Note: Could not change to Day view');
             }
         }
+        
+        // Wait for page to reload after Day view change
+        console.log('  Waiting for page to reload after Day view change...');
+        await page.waitForTimeout(3000);
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+            console.log('  Network not idle, continuing anyway...');
+        });
+        console.log('  ✓ Page reloaded');
 
         // Step 5: Address
         console.log('Step 5: Entering address:', address);
@@ -776,10 +784,11 @@ app.post('/api/automate', async (req, res) => {
         // Helper function to zoom and collapse sidebar
         async function prepareForScreenshot() {
             console.log('  Zooming in 4x...');
+            
+            // Try multiple methods to find and click zoom button
+            let zoomSuccess = false;
+            
             try {
-                // Try multiple methods to find and click zoom button
-                let zoomSuccess = false;
-                
                 // Method 1: Try to find the + button specifically
                 try {
                     const zoomInButton = page.locator('div.v-button:has(span.v-icon.FontAwesome)').filter({ hasText: '+' }).first();
@@ -843,7 +852,7 @@ app.post('/api/automate', async (req, res) => {
                     console.log('    Warning: Could not zoom - all methods failed');
                 }
             } catch (e) {
-                console.log('    Warning: Could not zoom:', e.message);
+                console.log('    Warning: Could not zoom - outer error:', e.message);
             }
 
             console.log('  Collapsing sidebar...');
