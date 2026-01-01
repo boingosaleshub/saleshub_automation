@@ -775,22 +775,75 @@ app.post('/api/automate', async (req, res) => {
 
         // Helper function to zoom and collapse sidebar
         async function prepareForScreenshot() {
-            console.log('  Zooming in...');
+            console.log('  Zooming in 4x...');
             try {
-                const zoomButton = page.locator('div.v-button.v-widget span.v-icon.FontAwesome').first();
-                await zoomButton.waitFor({ state: 'visible', timeout: 10000 });
-                // Zoom in 4x
-                await zoomButton.click({ force: true });
-                await page.waitForTimeout(500);
-                await zoomButton.click({ force: true });
-                await page.waitForTimeout(500);
-                await zoomButton.click({ force: true });
-                await page.waitForTimeout(500);
-                await zoomButton.click({ force: true });
-                await page.waitForTimeout(500);
-                console.log('    ✓ Zoomed in 4x');
+                // Try multiple methods to find and click zoom button
+                let zoomSuccess = false;
+                
+                // Method 1: Try to find the + button specifically
+                try {
+                    const zoomInButton = page.locator('div.v-button:has(span.v-icon.FontAwesome)').filter({ hasText: '+' }).first();
+                    if (await zoomInButton.count() > 0) {
+                        for (let i = 0; i < 4; i++) {
+                            await zoomInButton.click({ force: true });
+                            await page.waitForTimeout(500);
+                        }
+                        zoomSuccess = true;
+                        console.log('    ✓ Zoomed in 4x (method 1)');
+                    }
+                } catch (e) {
+                    console.log('    Method 1 failed:', e.message);
+                }
+                
+                // Method 2: Try all zoom controls and find the + button
+                if (!zoomSuccess) {
+                    try {
+                        const allButtons = await page.locator('div.v-button.v-widget').all();
+                        for (const btn of allButtons) {
+                            const text = await btn.textContent().catch(() => '');
+                            if (text.includes('+')) {
+                                for (let i = 0; i < 4; i++) {
+                                    await btn.click({ force: true });
+                                    await page.waitForTimeout(500);
+                                }
+                                zoomSuccess = true;
+                                console.log('    ✓ Zoomed in 4x (method 2)');
+                                break;
+                            }
+                        }
+                    } catch (e) {
+                        console.log('    Method 2 failed:', e.message);
+                    }
+                }
+                
+                // Method 3: Use evaluate to find and click zoom button
+                if (!zoomSuccess) {
+                    try {
+                        await page.evaluate(() => {
+                            const buttons = document.querySelectorAll('div.v-button');
+                            for (const btn of buttons) {
+                                if (btn.textContent.includes('+')) {
+                                    for (let i = 0; i < 4; i++) {
+                                        btn.click();
+                                    }
+                                    return true;
+                                }
+                            }
+                            return false;
+                        });
+                        await page.waitForTimeout(2000); // Wait for zoom animation
+                        zoomSuccess = true;
+                        console.log('    ✓ Zoomed in 4x (method 3 - evaluate)');
+                    } catch (e) {
+                        console.log('    Method 3 failed:', e.message);
+                    }
+                }
+                
+                if (!zoomSuccess) {
+                    console.log('    Warning: Could not zoom - all methods failed');
+                }
             } catch (e) {
-                console.log('    Warning: Could not zoom');
+                console.log('    Warning: Could not zoom:', e.message);
             }
 
             console.log('  Collapsing sidebar...');
