@@ -779,11 +779,16 @@ app.post('/api/automate', async (req, res) => {
             try {
                 const zoomButton = page.locator('div.v-button.v-widget span.v-icon.FontAwesome').first();
                 await zoomButton.waitFor({ state: 'visible', timeout: 10000 });
+                // Zoom in 4x
                 await zoomButton.click({ force: true });
-                await page.waitForTimeout(600);
+                await page.waitForTimeout(500);
                 await zoomButton.click({ force: true });
-                await page.waitForTimeout(600);
-                console.log('    ✓ Zoomed in 2x');
+                await page.waitForTimeout(500);
+                await zoomButton.click({ force: true });
+                await page.waitForTimeout(500);
+                await zoomButton.click({ force: true });
+                await page.waitForTimeout(500);
+                console.log('    ✓ Zoomed in 4x');
             } catch (e) {
                 console.log('    Warning: Could not zoom');
             }
