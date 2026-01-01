@@ -735,11 +735,41 @@ app.post('/api/automate', async (req, res) => {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
 
-        // Helper function - SIMPLIFIED: just wait, don't try to close popups
-        // The popup closure was causing browser freeze on Render
+        // Helper function to close RSRP dialog using DOM manipulation
+        // Using evaluate() is fast and doesn't cause browser freeze like clicking buttons
         async function closeOpenPopups() {
-            console.log('  Waiting for page to settle...');
-            await page.waitForTimeout(2000);
+            console.log('  Closing any open dialogs...');
+            try {
+                // Use evaluate to remove dialog elements directly from DOM
+                const removed = await page.evaluate(() => {
+                    let removedCount = 0;
+                    
+                    // Find and remove v-window elements (RSRP dialog)
+                    const windows = document.querySelectorAll('.v-window, .v-window-wrap, .v-window-contents');
+                    windows.forEach(w => {
+                        w.remove();
+                        removedCount++;
+                    });
+                    
+                    // Also remove any modal curtain/overlay
+                    const overlays = document.querySelectorAll('.v-window-modalitycurtain');
+                    overlays.forEach(o => {
+                        o.remove();
+                        removedCount++;
+                    });
+                    
+                    return removedCount;
+                });
+                
+                if (removed > 0) {
+                    console.log(`    ✓ Removed ${removed} dialog elements`);
+                }
+            } catch (e) {
+                console.log('    Note: Error removing dialogs:', e.message);
+            }
+            
+            // Small wait for page to stabilize
+            await page.waitForTimeout(500);
             console.log('    ✓ Page settled');
         }
 
