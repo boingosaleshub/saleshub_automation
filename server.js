@@ -371,7 +371,7 @@ app.post('/api/automate', async (req, res) => {
 
         await humanClick(page, passwordInput);
         await shortWait(page);
-        await humanTypeLocator(passwordInput, 'Boingo2025!', page);
+        await humanTypeLocator(passwordInput, 'MmaSBn5xDvUamMdL8QKg4HFd7', page);
         await humanWait(page, 600);
 
         console.log('Step 3: Submitting login...');
