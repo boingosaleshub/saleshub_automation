@@ -32,7 +32,8 @@ app.get('/', (req, res) => {
         status: 'running',
         endpoints: {
             health: 'GET /health',
-            ooklaAutomate: 'POST /api/automate'
+            ooklaAutomate: 'POST /api/automate',
+            ooklaAutomateStream: 'POST /api/automate/stream'
         }
     });
 });
@@ -303,6 +304,684 @@ async function takeScreenshot(page, viewType, sanitizedAddress, timestamp) {
 
 // ============== OOKLA AUTOMATION ==============
 
+// Helper to send SSE progress updates
+function sendProgress(res, progress, step, status = 'in_progress') {
+    const data = JSON.stringify({ progress, step, status });
+    res.write(`data: ${data}\n\n`);
+}
+
+// SSE endpoint for streaming progress
+app.post('/api/automate/stream', async (req, res) => {
+    let browser;
+    const startTime = Date.now();
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    try {
+        const { address, carriers, coverageTypes } = req.body;
+
+        if (!address) {
+            sendProgress(res, 0, 'Error: Address is required', 'error');
+            res.end();
+            return;
+        }
+
+        console.log('='.repeat(60));
+        console.log('Starting Ookla automation with SSE');
+        console.log('Address:', address);
+        console.log('Carriers:', carriers);
+        console.log('Coverage types:', coverageTypes);
+        console.log('='.repeat(60));
+
+        sendProgress(res, 0, 'Initializing browser...');
+
+        browser = await chromium.launch({
+            headless: true,
+            slowMo: 50,
+            args: [
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+            ],
+        });
+
+        const context = await browser.newContext({
+            viewport: { width: 1280, height: 720 },
+            ignoreHTTPSErrors: true,
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            locale: 'en-US',
+            timezoneId: 'America/New_York',
+            geolocation: { longitude: -73.935242, latitude: 40.730610 },
+            permissions: ['geolocation'],
+        });
+
+        await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        });
+
+        const page = await context.newPage();
+
+        // Step 1: Login
+        sendProgress(res, 5, 'Navigating to login page...');
+        console.log('Step 1: Navigating to login page...');
+        await page.goto('https://cellanalytics.ookla.com/login', {
+            waitUntil: 'domcontentloaded',
+            timeout: 45000,
+        });
+
+        await page.waitForSelector('input[name="username"]', { timeout: 10000 });
+        await humanWait(page, 800);
+
+        sendProgress(res, 10, 'Entering credentials...');
+        console.log('Step 2: Filling credentials...');
+        const usernameInput = page.locator('input[name="username"]');
+        const passwordInput = page.locator('input[name="password"]');
+
+        await humanClick(page, usernameInput);
+        await shortWait(page);
+        await humanTypeLocator(usernameInput, process.env.OOKLA_USERNAME || 'zjanparian', page);
+        await humanWait(page, 500);
+
+        await humanClick(page, passwordInput);
+        await shortWait(page);
+        await humanTypeLocator(passwordInput, process.env.OOKLA_PASSWORD || 'MmaSBn5xDvUamMdL8QKg4HFd7', page);
+        await humanWait(page, 600);
+
+        sendProgress(res, 15, 'Logging in...');
+        console.log('Step 3: Submitting login...');
+        const submitButton = page.locator('input[type="submit"], button[type="submit"]');
+        await humanClick(page, submitButton);
+
+        try {
+            await page.waitForURL('**/cellanalytics.ookla.com/**', { timeout: 30000 });
+            console.log('  ✓ Redirected to dashboard');
+        } catch (error) {
+            console.log('  Navigation wait timeout, checking URL...');
+        }
+
+        await longWait(page);
+
+        const currentUrl = page.url();
+        if (currentUrl.includes('/login')) {
+            await browser.close();
+            sendProgress(res, 15, 'Login failed', 'error');
+            res.end();
+            return;
+        }
+
+        console.log('  ✓ Login successful!');
+        sendProgress(res, 20, 'Login successful!');
+
+        // Step 4: Day View
+        sendProgress(res, 22, 'Changing to day view...');
+        console.log('Step 4: Changing to Day view...');
+        try {
+            const layersToggle = page.locator('a.leaflet-control-layers-toggle[title="Layers"]');
+            await layersToggle.waitFor({ state: 'attached', timeout: 8000 });
+            await layersToggle.hover();
+            const dayRadioInput = page.locator('input[type="radio"].leaflet-control-layers-selector[name="leaflet-base-layers"]').nth(3);
+            await dayRadioInput.click({ force: true, timeout: 2000 });
+            console.log('  ✓ Day view selected');
+            await page.mouse.move(100, 100);
+        } catch (error) {
+            console.log('  Day view switch error, trying alternatives...');
+            try {
+                await page.evaluate(() => {
+                    const radios = document.querySelectorAll('input[type="radio"].leaflet-control-layers-selector');
+                    if (radios[3]) radios[3].click();
+                });
+                console.log('  ✓ Day view selected (via evaluate)');
+            } catch (e) {
+                console.log('  Note: Could not change to Day view');
+            }
+        }
+
+        // Step 5: Address
+        sendProgress(res, 28, 'Entering address...');
+        console.log('Step 5: Entering address:', address);
+
+        let addressInput = null;
+        const allTextInputs = await page.locator('input[type="text"]').all();
+        console.log(`  Found ${allTextInputs.length} text inputs on page`);
+
+        for (let i = 0; i < allTextInputs.length; i++) {
+            const input = allTextInputs[i];
+            const isVisible = await input.isVisible().catch(() => false);
+            const isReadonly = await input.getAttribute('readonly').catch(() => null);
+
+            if (isVisible && !isReadonly) {
+                addressInput = input;
+                console.log(`  Found address input at index ${i} (not readonly)`);
+                break;
+            }
+        }
+
+        if (!addressInput) {
+            addressInput = page.locator('input[type="text"]:not([readonly])').first();
+            console.log('  Using fallback selector: input[type="text"]:not([readonly])');
+        }
+
+        await addressInput.waitFor({ state: 'visible', timeout: 15000 });
+
+        try {
+            await addressInput.fill('');
+            await page.waitForTimeout(300);
+        } catch (e) {
+            console.log('  Could not clear with fill, trying triple-click');
+            await addressInput.click({ clickCount: 3 });
+            await page.waitForTimeout(300);
+            await addressInput.press('Backspace');
+            await page.waitForTimeout(200);
+        }
+
+        await humanTypeLocator(addressInput, address, page);
+        console.log('  ✓ Address entered');
+        await mediumWait(page);
+
+        await addressInput.press('Enter');
+        console.log('  ✓ Enter pressed');
+        await longWait(page);
+        await longWait(page);
+
+        // Step 6: Network Provider
+        sendProgress(res, 38, 'Opening network provider...');
+        console.log('Step 6: Opening Network Provider...');
+
+        let networkProviderOpened = false;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (attempt > 1) {
+                    console.log(`  Attempt ${attempt}/3...`);
+                    await page.waitForTimeout(2000);
+                }
+
+                const toggle1 = page.locator('text=Network Provider').locator('..').locator('span').first();
+                if (await toggle1.count() > 0) {
+                    await toggle1.click({ force: true, timeout: 10000 });
+                    networkProviderOpened = true;
+                    console.log('  ✓ Network Provider section opened (method 1)');
+                    break;
+                }
+            } catch (e1) {
+                console.log(`  Method 1 failed: ${e1.message}`);
+
+                try {
+                    const toggle2 = page.locator('text=Network Provider').locator('..');
+                    if (await toggle2.count() > 0) {
+                        await toggle2.click({ force: true, timeout: 10000 });
+                        networkProviderOpened = true;
+                        console.log('  ✓ Network Provider section opened (method 2)');
+                        break;
+                    }
+                } catch (e2) {
+                    console.log(`  Method 2 failed: ${e2.message}`);
+
+                    try {
+                        const result = await page.evaluate(() => {
+                            const elements = document.querySelectorAll('*');
+                            for (const el of elements) {
+                                if (el.textContent && el.textContent.includes('Network Provider')) {
+                                    const toggle = el.querySelector('.v-treetable-treespacer, .v-treetable-node-closed, span');
+                                    if (toggle) {
+                                        toggle.click();
+                                        return { success: true, method: 'evaluate-toggle' };
+                                    }
+                                    el.click();
+                                    return { success: true, method: 'evaluate-element' };
+                                }
+                            }
+                            return { success: false };
+                        });
+
+                        if (result.success) {
+                            networkProviderOpened = true;
+                            console.log(`  ✓ Network Provider section opened (${result.method})`);
+                            break;
+                        }
+                    } catch (e3) {
+                        console.log(`  Method 3 failed: ${e3.message}`);
+                    }
+                }
+            }
+        }
+
+        if (!networkProviderOpened) {
+            throw new Error('Could not open Network Provider section after 3 attempts');
+        }
+
+        await longWait(page);
+
+        // Step 7: Carriers
+        sendProgress(res, 48, 'Configuring carriers...');
+        const carriersToSelect = carriers || [];
+        const allCarriers = { 'AT&T': 'AT&T US', 'Verizon': 'Verizon', 'T-Mobile': 'T-Mobile US' };
+
+        console.log('Step 7: Configuring carriers...');
+        for (const [userName, siteName] of Object.entries(allCarriers)) {
+            try {
+                let found = false;
+
+                const carrierLabel = page.locator(`label:has-text("${siteName}")`).first();
+                if (await carrierLabel.count() > 0) {
+                    await carrierLabel.waitFor({ state: 'visible', timeout: 3000 }).catch(() => { });
+                    if (await carrierLabel.isVisible().catch(() => false)) {
+                        const carrierLabelFor = await carrierLabel.getAttribute('for');
+                        if (carrierLabelFor) {
+                            const carrierCheckbox = page.locator(`#${carrierLabelFor}`);
+                            const isChecked = await carrierCheckbox.isChecked().catch(() => false);
+                            const shouldBeChecked = carriersToSelect.includes(userName);
+
+                            if (isChecked !== shouldBeChecked) {
+                                await carrierLabel.click({ force: true });
+                                console.log(`  ${shouldBeChecked ? '✓ Checked' : '✗ Unchecked'} ${siteName}`);
+                                await shortWait(page);
+                            } else {
+                                console.log(`  ${siteName} already ${isChecked ? 'checked' : 'unchecked'}`);
+                            }
+                            found = true;
+                        }
+                    }
+                }
+
+                if (!found) {
+                    const shouldBeChecked = carriersToSelect.includes(userName);
+                    const result = await page.evaluate(({ siteName, shouldCheck }) => {
+                        const labels = document.querySelectorAll('label');
+                        for (const label of labels) {
+                            if (label.textContent && label.textContent.includes(siteName.split(' ')[0])) {
+                                const forId = label.getAttribute('for');
+                                if (forId) {
+                                    const checkbox = document.getElementById(forId);
+                                    if (checkbox) {
+                                        const isChecked = checkbox.checked;
+                                        if (isChecked !== shouldCheck) {
+                                            label.click();
+                                            return { clicked: true, action: shouldCheck ? 'checked' : 'unchecked' };
+                                        }
+                                        return { clicked: false, already: isChecked ? 'checked' : 'unchecked' };
+                                    }
+                                }
+                            }
+                        }
+                        return { error: 'not found' };
+                    }, { siteName, shouldCheck: shouldBeChecked });
+
+                    if (result.clicked) {
+                        console.log(`  ✓ ${result.action} ${siteName} (via evaluate)`);
+                        await shortWait(page);
+                    } else if (result.already) {
+                        console.log(`  ${siteName} already ${result.already}`);
+                    } else {
+                        console.log(`  Warning: Could not find ${userName}`);
+                    }
+                }
+            } catch (error) {
+                console.log(`  Warning: Could not configure ${userName}: ${error.message}`);
+            }
+        }
+        await mediumWait(page);
+
+        // Step 8: LTE
+        sendProgress(res, 58, 'Opening LTE options...');
+        console.log('Step 8: Opening LTE options...');
+
+        let lteOpened = false;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (attempt > 1) {
+                    console.log(`  Attempt ${attempt}/3...`);
+                    await page.waitForTimeout(2000);
+                }
+
+                const toggle1 = page.locator('text=LTE').locator('..').locator('span').first();
+                if (await toggle1.count() > 0) {
+                    await toggle1.click({ force: true, timeout: 10000 });
+                    lteOpened = true;
+                    console.log('  ✓ LTE section opened (method 1)');
+                    break;
+                }
+            } catch (e1) {
+                console.log(`  Method 1 failed: ${e1.message}`);
+
+                try {
+                    const toggle2 = page.locator('text=LTE').locator('..');
+                    if (await toggle2.count() > 0) {
+                        await toggle2.click({ force: true, timeout: 10000 });
+                        lteOpened = true;
+                        console.log('  ✓ LTE section opened (method 2)');
+                        break;
+                    }
+                } catch (e2) {
+                    console.log(`  Method 2 failed: ${e2.message}`);
+
+                    try {
+                        const result = await page.evaluate(() => {
+                            const elements = document.querySelectorAll('*');
+                            for (const el of elements) {
+                                if (el.textContent && el.textContent.trim() === 'LTE') {
+                                    const toggle = el.querySelector('.v-treetable-treespacer, .v-treetable-node-closed, span');
+                                    if (toggle) {
+                                        toggle.click();
+                                        return { success: true };
+                                    }
+                                    el.click();
+                                    return { success: true };
+                                }
+                            }
+                            return { success: false };
+                        });
+
+                        if (result.success) {
+                            lteOpened = true;
+                            console.log('  ✓ LTE section opened (evaluate)');
+                            break;
+                        }
+                    } catch (e3) {
+                        console.log(`  Method 3 failed: ${e3.message}`);
+                    }
+                }
+            }
+        }
+
+        if (!lteOpened) {
+            throw new Error('Could not open LTE section after 3 attempts');
+        }
+
+        await longWait(page);
+
+        // Step 9: RSRP
+        sendProgress(res, 68, 'Selecting RSRP...');
+        console.log('Step 9: Selecting RSRP...');
+        try {
+            const rsrpRow = page.locator('tr').filter({ has: page.locator('span.v-captiontext:has-text("RSRP")') });
+            const rsrpCheckbox = rsrpRow.locator('input[type="checkbox"]').first();
+            await rsrpCheckbox.waitFor({ state: 'attached', timeout: 15000 });
+            if (!(await rsrpCheckbox.isChecked())) {
+                await rsrpCheckbox.check({ force: true });
+                console.log('  ✓ RSRP checkbox selected');
+                await page.keyboard.press('Escape').catch(() => { });
+                await page.waitForTimeout(300);
+            }
+            await mediumWait(page);
+
+            const lteRows = page.locator('tr').filter({ has: page.locator('span.v-captiontext:text-matches("RSRQ|SNR|CQI", "i")') });
+            const rowCount = await lteRows.count();
+            for (let i = 0; i < rowCount; i++) {
+                const row = lteRows.nth(i);
+                const checkbox = row.locator('input[type="checkbox"]').first();
+                try {
+                    if (await checkbox.isChecked()) {
+                        await checkbox.uncheck({ force: true });
+                        await shortWait(page);
+                    }
+                } catch (e) { }
+            }
+        } catch (error) {
+            console.log('  Error with RSRP selection:', error.message);
+        }
+        await mediumWait(page);
+
+        // ============== SCREENSHOTS ==============
+        sendProgress(res, 75, 'Preparing screenshots...');
+
+        const hasIndoor = coverageTypes?.includes('Indoor');
+        const hasOutdoor = coverageTypes?.includes('Outdoor');
+        const hasIndoorAndOutdoor = coverageTypes?.includes('Indoor & Outdoor');
+
+        const screenshots = [];
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
+
+        async function closeOpenPopups() {
+            console.log('  Closing any open dialogs...');
+            try {
+                const removed = await page.evaluate(() => {
+                    let removedCount = 0;
+                    const windows = document.querySelectorAll('.v-window, .v-window-wrap, .v-window-contents');
+                    windows.forEach(w => {
+                        w.remove();
+                        removedCount++;
+                    });
+                    const overlays = document.querySelectorAll('.v-window-modalitycurtain');
+                    overlays.forEach(o => {
+                        o.remove();
+                        removedCount++;
+                    });
+                    return removedCount;
+                });
+
+                if (removed > 0) {
+                    console.log(`    ✓ Removed ${removed} dialog elements`);
+                }
+            } catch (e) {
+                console.log('    Note: Error removing dialogs:', e.message);
+            }
+            await page.waitForTimeout(500);
+            console.log('    ✓ Page settled');
+        }
+
+        async function prepareForScreenshot() {
+            console.log('  Zooming in...');
+            try {
+                console.log('    Finding zoom button...');
+                let zoomButton = null;
+
+                try {
+                    const containers = page.locator('.v-splitpanel-second-container');
+                    if (await containers.count() > 0) {
+                        const mapContainer = containers.first();
+                        const buttons = mapContainer.locator('.v-button');
+                        const count = await buttons.count();
+
+                        for (let i = 0; i < count; i++) {
+                            const btn = buttons.nth(i);
+                            const icon = btn.locator('.v-icon.FontAwesome');
+                            if (await icon.count() > 0) {
+                                zoomButton = btn;
+                                console.log('    ✓ Found zoom button via container query');
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.log('    Error searching container:', e.message);
+                }
+
+                if (!zoomButton) {
+                    console.log('    Fallback: Searching globally for plus icon...');
+                    const potentialButtons = page.locator('.v-button .v-icon.FontAwesome');
+                    const count = await potentialButtons.count();
+                    for (let i = 0; i < count; i++) {
+                        const icon = potentialButtons.nth(i);
+                        const className = await icon.getAttribute('class') || '';
+                        if (className.includes('FontAwesome')) {
+                            zoomButton = icon.locator('..').locator('..');
+                            break;
+                        }
+                    }
+                }
+
+                if (!zoomButton) {
+                    throw new Error('Zoom button not found');
+                }
+
+                await zoomButton.waitFor({ state: 'visible', timeout: 5000 });
+
+                console.log('    Clicking zoom button 4 times...');
+                for (let i = 1; i <= 4; i++) {
+                    await zoomButton.click({ force: true });
+                    console.log(`      Click ${i}/4`);
+                    await page.waitForTimeout(1000);
+                }
+                console.log('    ✓ Zoomed in 4x successfully');
+
+            } catch (e) {
+                console.log(`    Warning: Could not zoom: ${e.message}`);
+                console.log('    (Skipping zoom, hoping default view is okay)');
+            }
+
+            console.log('  Collapsing sidebar...');
+            try {
+                const collapseButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();
+                await collapseButton.waitFor({ state: 'visible', timeout: 10000 });
+                await collapseButton.click({ force: true });
+                await page.waitForTimeout(800);
+                console.log('    ✓ Sidebar collapsed');
+            } catch (e) {
+                console.log('    Warning: Could not collapse sidebar');
+            }
+
+            await closeOpenPopups();
+        }
+
+        async function expandSidebar() {
+            try {
+                const expandButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();
+                if (await expandButton.count() > 0) {
+                    await expandButton.click({ force: true });
+                    await page.waitForTimeout(800);
+                    console.log('    ✓ Sidebar expanded');
+                }
+            } catch (e) {
+                console.log('    Note: Could not expand sidebar');
+            }
+        }
+
+        let sidebarCollapsed = false;
+        let screenshotCount = 0;
+        const totalScreenshots = (hasIndoor ? 1 : 0) + (hasOutdoor ? 1 : 0) + (hasIndoorAndOutdoor ? 1 : 0);
+
+        // Indoor View
+        if (hasIndoor) {
+            screenshotCount++;
+            sendProgress(res, 75 + (screenshotCount / totalScreenshots) * 20, `Capturing indoor view (${screenshotCount}/${totalScreenshots})...`);
+            console.log('Step 10: Indoor View...');
+            if (await selectView(page, 'Indoor View')) {
+                if (!sidebarCollapsed) {
+                    await prepareForScreenshot();
+                    sidebarCollapsed = true;
+                }
+                const screenshot = await takeScreenshot(page, 'INDOOR', sanitizedAddress, timestamp);
+                screenshots.push(screenshot);
+                if (hasOutdoor || hasIndoorAndOutdoor) {
+                    await expandSidebar();
+                    sidebarCollapsed = false;
+                }
+            } else {
+                console.log('  ⚠ Skipping Indoor screenshot - view selection failed');
+            }
+        }
+
+        // Outdoor View
+        if (hasOutdoor) {
+            screenshotCount++;
+            sendProgress(res, 75 + (screenshotCount / totalScreenshots) * 20, `Capturing outdoor view (${screenshotCount}/${totalScreenshots})...`);
+            console.log('Step 11: Outdoor View...');
+            if (await selectView(page, 'Outdoor View')) {
+                if (!sidebarCollapsed) {
+                    await prepareForScreenshot();
+                    sidebarCollapsed = true;
+                }
+                const screenshot = await takeScreenshot(page, 'OUTDOOR', sanitizedAddress, timestamp);
+                screenshots.push(screenshot);
+                if (hasIndoorAndOutdoor) {
+                    await expandSidebar();
+                    sidebarCollapsed = false;
+                }
+            } else {
+                console.log('  ⚠ Skipping Outdoor screenshot - view selection failed');
+            }
+        }
+
+        // Indoor & Outdoor View
+        if (hasIndoorAndOutdoor) {
+            screenshotCount++;
+            sendProgress(res, 75 + (screenshotCount / totalScreenshots) * 20, `Capturing indoor & outdoor view (${screenshotCount}/${totalScreenshots})...`);
+            console.log('Step 12: Indoor & Outdoor View...');
+
+            const possibleNames = [
+                'Outdoor & Indoor',
+                'Indoor & Outdoor',
+                'Outdoor and Indoor',
+                'Indoor and Outdoor',
+                'Indoor & Outdoor View',
+                'Outdoor & Indoor View'
+            ];
+
+            let success = false;
+            for (const viewName of possibleNames) {
+                if (await selectView(page, viewName)) {
+                    success = true;
+                    break;
+                }
+            }
+
+            if (success) {
+                if (!sidebarCollapsed) {
+                    await prepareForScreenshot();
+                    sidebarCollapsed = true;
+                }
+                const screenshot = await takeScreenshot(page, 'OUTDOOR_INDOOR', sanitizedAddress, timestamp);
+                screenshots.push(screenshot);
+            } else {
+                console.log('  ⚠ Skipping Indoor & Outdoor screenshot - view selection failed');
+            }
+        }
+
+        sendProgress(res, 98, 'Finalizing...');
+
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log('='.repeat(60));
+        console.log(`✓ All steps complete! (${duration}s)`);
+        console.log(`Screenshots captured: ${screenshots.length}`);
+
+        screenshots.forEach((ss, idx) => {
+            console.log(`  ${idx + 1}. ${ss.filename} - ${ss.size} KB`);
+        });
+
+        const totalSizeKB = (JSON.stringify(screenshots).length / 1024).toFixed(2);
+        console.log(`Total response size: ~${totalSizeKB} KB`);
+        console.log('='.repeat(60));
+
+        await browser.close();
+
+        // Send final success with screenshots
+        sendProgress(res, 100, 'Complete!', 'success');
+        const response = {
+            success: true,
+            screenshots,
+            duration: parseFloat(duration),
+            count: screenshots.length
+        };
+        res.write(`data: ${JSON.stringify({ ...response, final: true })}\n\n`);
+        res.end();
+
+    } catch (error) {
+        console.error('Automation error:', error);
+        if (browser) {
+            try {
+                await browser.close();
+            } catch (e) {
+                console.error('Error closing browser:', e.message);
+            }
+        }
+        sendProgress(res, 0, error.message, 'error');
+        res.end();
+    }
+});
+
+// Original non-streaming endpoint (kept for backward compatibility)
 app.post('/api/automate', async (req, res) => {
     let browser;
     const startTime = Date.now();
