@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const { chromium } = require('playwright');
@@ -366,12 +368,12 @@ app.post('/api/automate', async (req, res) => {
 
         await humanClick(page, usernameInput);
         await shortWait(page);
-        await humanTypeLocator(usernameInput, 'zjanparian', page);
+        await humanTypeLocator(usernameInput, process.env.OOKLA_USERNAME || 'zjanparian', page);
         await humanWait(page, 500);
 
         await humanClick(page, passwordInput);
         await shortWait(page);
-        await humanTypeLocator(passwordInput, 'MmaSBn5xDvUamMdL8QKg4HFd7', page);
+        await humanTypeLocator(passwordInput, process.env.OOKLA_PASSWORD || 'MmaSBn5xDvUamMdL8QKg4HFd7', page);
         await humanWait(page, 600);
 
         console.log('Step 3: Submitting login...');
