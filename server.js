@@ -1,8 +1,11 @@
-﻿require('dotenv').config();
+require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const { chromium } = require('playwright');
+
+// Import Routes
+const romRoutes = require('./routes/romRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,11 +35,21 @@ app.get('/', (req, res) => {
         status: 'running',
         endpoints: {
             health: 'GET /health',
-            ooklaAutomate: 'POST /api/automate',
-            ooklaAutomateStream: 'POST /api/automate/stream'
+            coveragePlot: {
+                automate: 'POST /api/automate',
+                automateStream: 'POST /api/automate/stream'
+            },
+            romGenerator: {
+                automate: 'POST /api/rom/automate',
+                health: 'GET /api/rom/health'
+            }
         }
     });
 });
+
+// ============== ROM AUTOMATION ROUTES ==============
+// ROM Generator automation - separate from Coverage Plot
+app.use('/api/rom', romRoutes);
 
 // ============== HELPER FUNCTIONS ==============
 
@@ -1694,7 +1707,15 @@ app.listen(PORT, () => {
     console.log('='.repeat(60));
     console.log(`   Port: ${PORT}`);
     console.log(`   Health: http://localhost:${PORT}/health`);
-    console.log(`   API: POST http://localhost:${PORT}/api/automate`);
+    console.log('');
+    console.log('   Coverage Plot API:');
+    console.log(`     POST http://localhost:${PORT}/api/automate`);
+    console.log(`     POST http://localhost:${PORT}/api/automate/stream`);
+    console.log('');
+    console.log('   ROM Generator API:');
+    console.log(`     POST http://localhost:${PORT}/api/rom/automate`);
+    console.log(`     GET  http://localhost:${PORT}/api/rom/health`);
+    console.log('');
     console.log(`   Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
     console.log('='.repeat(60));
 });
