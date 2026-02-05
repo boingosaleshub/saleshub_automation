@@ -41,6 +41,7 @@ app.get('/', (req, res) => {
             },
             romGenerator: {
                 automate: 'POST /api/rom/automate',
+                automateStream: 'POST /api/rom/automate/stream',
                 health: 'GET /api/rom/health'
             }
         }
@@ -1714,6 +1715,7 @@ app.listen(PORT, () => {
     console.log('');
     console.log('   ROM Generator API:');
     console.log(`     POST http://localhost:${PORT}/api/rom/automate`);
+    console.log(`     POST http://localhost:${PORT}/api/rom/automate/stream`);
     console.log(`     GET  http://localhost:${PORT}/api/rom/health`);
     console.log('');
     console.log(`   Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);

@@ -143,6 +143,125 @@ async function executeRomAutomation({ address, carriers }) {
 }
 
 /**
+ * Execute ROM automation with streaming progress (SSE).
+ * Calls sendProgress(progress, step, extraData) at each step.
+ * @param {Object} params - Automation parameters (address, carriers)
+ * @param {Function} sendProgress - (progress, step, data?) => void; data can include { final, success, screenshots, excelFiles, error }
+ * @returns {Promise<Object>} Result with screenshots (same as executeRomAutomation)
+ */
+async function executeRomAutomationStream({ address, carriers }, sendProgress) {
+    let browser = null;
+    const startTime = Date.now();
+
+    const emit = (progress, step, data = {}) => {
+        sendProgress(progress, step, { status: 'processing', ...data });
+    };
+
+    try {
+        emit(5, 'Initializing...');
+        const { browser: br, page } = await ooklaHelpers.createBrowserContext();
+        browser = br;
+
+        emit(10, 'Opening browser...');
+        emit(15, 'Logging in...');
+        await ooklaHelpers.loginToOokla(page);
+
+        emit(22, 'Selecting day view...');
+        await ooklaHelpers.selectDayView(page);
+
+        emit(28, 'Entering address...');
+        await ooklaHelpers.enterAddress(page, address);
+
+        emit(35, 'Opening network provider...');
+        await ooklaHelpers.openNetworkProvider(page);
+
+        emit(45, 'Configuring carriers...');
+        await ooklaHelpers.configureCarriers(page, carriers);
+
+        emit(55, 'Opening LTE section...');
+        await ooklaHelpers.openLTESection(page);
+
+        emit(65, 'Selecting RSRP...');
+        await ooklaHelpers.selectRSRP(page);
+
+        const screenshots = [];
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const sanitizedAddress = address.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
+
+        async function prepareForScreenshot() {
+            await ooklaHelpers.zoomIn(page, 4);
+            await ooklaHelpers.collapseSidebar(page);
+            await ooklaHelpers.closeOpenPopups(page);
+        }
+
+        emit(70, 'Preparing screenshots...');
+        emit(75, 'Capturing indoor view...');
+        if (await ooklaHelpers.selectView(page, 'Indoor View')) {
+            await prepareForScreenshot();
+            const screenshot = await ooklaHelpers.takeScreenshot(page, 'rom_INDOOR', sanitizedAddress, timestamp);
+            screenshots.push(screenshot);
+            await ooklaHelpers.expandSidebar(page);
+        }
+
+        emit(85, 'Capturing outdoor view...');
+        if (await ooklaHelpers.selectView(page, 'Outdoor View')) {
+            await prepareForScreenshot();
+            const screenshot = await ooklaHelpers.takeScreenshot(page, 'rom_OUTDOOR', sanitizedAddress, timestamp);
+            screenshots.push(screenshot);
+        }
+
+        await browser.close();
+        browser = null;
+
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+        console.log('\n' + '='.repeat(60));
+        console.log('ROM AUTOMATION (STREAM) - Complete');
+        console.log('='.repeat(60));
+        console.log(`Duration: ${duration}s`);
+        console.log(`Screenshots captured: ${screenshots.length}`);
+        console.log('='.repeat(60));
+
+        const result = {
+            success: true,
+            screenshots,
+            duration: parseFloat(duration),
+            count: screenshots.length
+        };
+        sendProgress(100, 'Complete', {
+            final: true,
+            success: true,
+            screenshots: result.screenshots,
+            excelFiles: [],
+            duration: result.duration,
+            count: result.count
+        });
+        return result;
+    } catch (error) {
+        console.error('\n' + '='.repeat(60));
+        console.error('ROM AUTOMATION (STREAM) - Error');
+        console.error('='.repeat(60));
+        console.error('Error:', error.message);
+        console.error('='.repeat(60));
+
+        if (browser) {
+            try {
+                await browser.close();
+            } catch (e) {
+                console.error('Error closing browser:', e.message);
+            }
+        }
+
+        sendProgress(0, 'Error', {
+            final: true,
+            success: false,
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
  * Validate ROM automation request
  * @param {Object} params - Request parameters
  * @returns {Object} Validation result
@@ -172,5 +291,6 @@ function validateRequest({ address, carriers }) {
 
 module.exports = {
     executeRomAutomation,
+    executeRomAutomationStream,
     validateRequest
 };

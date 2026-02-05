@@ -12,7 +12,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { executeRomAutomation, validateRequest } = require('../services/romAutomation');
+const { executeRomAutomation, executeRomAutomationStream, validateRequest } = require('../services/romAutomation');
 
 /**
  * POST /api/rom/automate
@@ -96,6 +96,67 @@ router.post('/automate', async (req, res) => {
 });
 
 /**
+ * POST /api/rom/automate/stream
+ *
+ * SSE endpoint: runs ROM automation and streams progress events.
+ * Same request body as /api/rom/automate. Response is text/event-stream.
+ *
+ * Event format: data: {"progress": 5, "step": "Initializing...", "status": "processing"}
+ * Final event:  data: {"progress": 100, "step": "Complete", "final": true, "success": true, "excelFiles": [], "screenshots": [...]}
+ * Error event:  data: {"progress": 0, "step": "Error", "final": true, "success": false, "error": "..."}
+ */
+router.post('/automate/stream', async (req, res) => {
+    // SSE headers (same pattern as coverage-plot /api/automate/stream)
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
+
+    const sendProgress = (progress, step, data = {}) => {
+        const payload = { progress, step, ...data };
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    try {
+        const { address, carriers } = req.body;
+
+        console.log('\n' + '━'.repeat(60));
+        console.log('📸 ROM AUTOMATION STREAM REQUEST');
+        console.log('━'.repeat(60));
+        console.log('Time:', new Date().toISOString());
+        console.log('Address:', address);
+        console.log('Carriers:', carriers);
+        console.log('━'.repeat(60));
+
+        const validation = validateRequest({ address, carriers });
+        if (!validation.isValid) {
+            sendProgress(0, 'Validation failed', {
+                final: true,
+                success: false,
+                error: validation.errors.join('; '),
+                status: 'error'
+            });
+            res.end();
+            return;
+        }
+
+        await executeRomAutomationStream({ address, carriers }, sendProgress);
+        res.end();
+    } catch (error) {
+        console.error('ROM stream error:', error.message);
+        sendProgress(0, 'Error', {
+            final: true,
+            success: false,
+            error: error.message,
+            status: 'error'
+        });
+        res.end();
+    }
+});
+
+/**
  * GET /api/rom/health
  * 
  * Health check endpoint for ROM automation service
@@ -106,7 +167,8 @@ router.get('/health', (req, res) => {
         status: 'healthy',
         timestamp: new Date().toISOString(),
         endpoints: {
-            automate: 'POST /api/rom/automate'
+            automate: 'POST /api/rom/automate',
+            automateStream: 'POST /api/rom/automate/stream'
         }
     });
 });
