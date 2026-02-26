@@ -389,11 +389,34 @@ async function takeScreenshot(page, viewType, sanitizedAddress, timestamp) {
 
         await page.waitForTimeout(1000); // Reduced from 3s
 
-        // ALWAYS use full page screenshot - element screenshots cause freeze
-        console.log('    Taking full page screenshot...');
+        // Clip to map area only (exclude header + toolbar). Use viewport clip, not element.screenshot (causes freeze).
+        const DEFAULT_TOP_SKIP_PX = 200;
+        const topSkipPx = parseInt(process.env.SCREENSHOT_TOP_SKIP_PX, 10) || DEFAULT_TOP_SKIP_PX;
+        let clip = null;
+
+        try {
+            const mapEl = page.locator('.v-splitpanel-second-container').first();
+            const box = await mapEl.boundingBox({ timeout: 3000 });
+            if (box && box.width > 0 && box.height > 0) {
+                clip = { x: box.x, y: box.y, width: box.width, height: box.height };
+                console.log('    Using map container clip (exclude top section)');
+            }
+        } catch (e) {
+            console.log('    Map container not found or not visible, using fallback clip');
+        }
+        if (!clip) {
+            const vw = page.viewportSize();
+            if (vw && vw.width && vw.height && vw.height > topSkipPx) {
+                clip = { x: 0, y: topSkipPx, width: vw.width, height: vw.height - topSkipPx };
+                console.log(`    Using fallback clip (skip top ${topSkipPx}px)`);
+            }
+        }
+
+        console.log(clip ? '    Taking screenshot (map area only)...' : '    Taking full viewport screenshot...');
         const buffer = await page.screenshot({
             type: 'png',
             fullPage: false,
+            ...(clip && { clip }),
             timeout: 45000 // Increased timeout
         });
 
