@@ -389,34 +389,54 @@ async function takeScreenshot(page, viewType, sanitizedAddress, timestamp) {
 
         await page.waitForTimeout(1000); // Reduced from 3s
 
-        // Clip to map area only (exclude header + toolbar). Use viewport clip, not element.screenshot (causes freeze).
-        const DEFAULT_TOP_SKIP_PX = 200;
+        // Clip to map area only (exclude header, toolbar, sidebar, strips). Use viewport clip.
+        const vw = page.viewportSize() || { width: 1280, height: 720 };
+        const DEFAULT_TOP_SKIP_PX = 220;
+        const DEFAULT_LEFT_SKIP_PX = 52;
+        const DEFAULT_RIGHT_TRIM_PX = 32;
+        const DEFAULT_BOTTOM_TRIM_PX = 38;
         const topSkipPx = parseInt(process.env.SCREENSHOT_TOP_SKIP_PX, 10) || DEFAULT_TOP_SKIP_PX;
-        let clip = null;
+        const leftSkipPx = parseInt(process.env.SCREENSHOT_LEFT_TRIM_PX, 10) || DEFAULT_LEFT_SKIP_PX;
+        const rightTrimPx = parseInt(process.env.SCREENSHOT_RIGHT_TRIM_PX, 10) || DEFAULT_RIGHT_TRIM_PX;
+        const bottomTrimPx = parseInt(process.env.SCREENSHOT_BOTTOM_TRIM_PX, 10) || DEFAULT_BOTTOM_TRIM_PX;
 
-        try {
-            const mapEl = page.locator('.v-splitpanel-second-container').first();
-            const box = await mapEl.boundingBox({ timeout: 3000 });
-            if (box && box.width > 0 && box.height > 0) {
-                clip = { x: box.x, y: box.y, width: box.width, height: box.height };
-                console.log('    Using map container clip (exclude top section)');
-            }
-        } catch (e) {
-            console.log('    Map container not found or not visible, using fallback clip');
-        }
-        if (!clip) {
-            const vw = page.viewportSize();
-            if (vw && vw.width && vw.height && vw.height > topSkipPx) {
-                clip = { x: 0, y: topSkipPx, width: vw.width, height: vw.height - topSkipPx };
-                console.log(`    Using fallback clip (skip top ${topSkipPx}px)`);
-            }
-        }
+        // Always use viewport-based clip so we never capture toolbar/sidebars (deterministic)
+        let clip = {
+            x: leftSkipPx,
+            y: topSkipPx,
+            width: Math.max(1, vw.width - leftSkipPx - rightTrimPx),
+            height: Math.max(1, vw.height - topSkipPx - bottomTrimPx)
+        };
+        console.log(`    Clip: x=${clip.x} y=${clip.y} w=${clip.width} h=${clip.height} (exclude top/left/right/bottom)`);
 
-        console.log(clip ? '    Taking screenshot (map area only)...' : '    Taking full viewport screenshot...');
+        // Hide legend, scale bar, and all map controls (Ookla/Leaflet) so only map tiles + pin show
+        await page.evaluate(() => {
+            const hide = (el) => { if (el && el.style) { el.style.visibility = 'hidden'; el.style.opacity = '0'; } };
+            const sel = [
+                '.leaflet-control-container .leaflet-control',
+                '.leaflet-control-container .leaflet-top.leaflet-left > div',
+                '.leaflet-control-container .leaflet-bottom.leaflet-left > div',
+                '.leaflet-control-scale',
+                '.leaflet-control-attribution',
+                '.leaflet-control-layers',
+                '[class*="scale"]',
+                '[class*="legend"]'
+            ];
+            sel.forEach(s => { try { document.querySelectorAll(s).forEach(hide); } catch (_) {} });
+            // Hide any element that looks like scale bar (contains "m" and "ft" text)
+            try {
+                document.querySelectorAll('.leaflet-control-container *').forEach(el => {
+                    const t = (el.textContent || '').trim();
+                    if ((t.includes('m') && t.includes('ft')) || t.includes('dBm')) hide(el);
+                });
+            } catch (_) {}
+        }).catch(() => { /* ignore */ });
+
+        console.log('    Taking screenshot (map area only)...');
         const buffer = await page.screenshot({
             type: 'png',
             fullPage: false,
-            ...(clip && { clip }),
+            clip,
             timeout: 45000 // Increased timeout
         });
 
