@@ -925,65 +925,7 @@ app.post('/api/automate/stream', async (req, res) => {
         }
 
         async function prepareForScreenshot() {
-            console.log('  Zooming in...');
-            try {
-                console.log('    Finding zoom button...');
-                let zoomButton = null;
-
-                try {
-                    const containers = page.locator('.v-splitpanel-second-container');
-                    if (await containers.count() > 0) {
-                        const mapContainer = containers.first();
-                        const buttons = mapContainer.locator('.v-button');
-                        const count = await buttons.count();
-
-                        for (let i = 0; i < count; i++) {
-                            const btn = buttons.nth(i);
-                            const icon = btn.locator('.v-icon.FontAwesome');
-                            if (await icon.count() > 0) {
-                                zoomButton = btn;
-                                console.log('    ✓ Found zoom button via container query');
-                                break;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.log('    Error searching container:', e.message);
-                }
-
-                if (!zoomButton) {
-                    console.log('    Fallback: Searching globally for plus icon...');
-                    const potentialButtons = page.locator('.v-button .v-icon.FontAwesome');
-                    const count = await potentialButtons.count();
-                    for (let i = 0; i < count; i++) {
-                        const icon = potentialButtons.nth(i);
-                        const className = await icon.getAttribute('class') || '';
-                        if (className.includes('FontAwesome')) {
-                            zoomButton = icon.locator('..').locator('..');
-                            break;
-                        }
-                    }
-                }
-
-                if (!zoomButton) {
-                    throw new Error('Zoom button not found');
-                }
-
-                await zoomButton.waitFor({ state: 'visible', timeout: 5000 });
-
-                console.log('    Clicking zoom button 4 times...');
-                for (let i = 1; i <= 4; i++) {
-                    await zoomButton.click({ force: true });
-                    console.log(`      Click ${i}/4`);
-                    await page.waitForTimeout(1000);
-                }
-                console.log('    ✓ Zoomed in 4x successfully');
-
-            } catch (e) {
-                console.log(`    Warning: Could not zoom: ${e.message}`);
-                console.log('    (Skipping zoom, hoping default view is okay)');
-            }
-
+            console.log('  Zooming in skipped - using default map view.');
             console.log('  Collapsing sidebar...');
             try {
                 const collapseButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();
@@ -1651,87 +1593,7 @@ app.post('/api/automate', async (req, res) => {
 
         // Helper function to zoom and collapse sidebar
         async function prepareForScreenshot() {
-            console.log('  Zooming in...');
-            try {
-                // Find zoom button - improved strategy based on user feedback
-                console.log('    Finding zoom button...');
-                let zoomButton = null;
-
-                // Strategy 1: Look inside the specific container structure user identified
-                // The zoom button is usually in the split panel second container (map area)
-                // We look for a button with FontAwesome icon 'plus' (or similar)
-                try {
-                    const containers = page.locator('.v-splitpanel-second-container');
-                    if (await containers.count() > 0) {
-                        const mapContainer = containers.first();
-                        // Look for buttons inside this container
-                        const buttons = mapContainer.locator('.v-button');
-                        const count = await buttons.count();
-
-                        for (let i = 0; i < count; i++) {
-                            const btn = buttons.nth(i);
-                            // Check for icon class
-                            const icon = btn.locator('.v-icon.FontAwesome');
-                            if (await icon.count() > 0) {
-                                // Check if it's a plus icon (often \uf067 or class fa-plus or just looks like +)
-                                // We'll assume the first one with a FontAwesome icon in this container is likely Zoom In
-                                // or we can check the position (Zoom In is usually above Zoom Out)
-                                zoomButton = btn;
-                                console.log('    ✓ Found zoom button via container query');
-                                break;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.log('    Error searching container:', e.message);
-                }
-
-                // Strategy 2: Fallback to global icon search if Strategy 1 failed
-                if (!zoomButton) {
-                    console.log('    Fallback: Searching globally for plus icon...');
-                    const potentialButtons = page.locator('.v-button .v-icon.FontAwesome');
-                    const count = await potentialButtons.count();
-                    for (let i = 0; i < count; i++) {
-                        const icon = potentialButtons.nth(i);
-                        // Check for plus sign or gammas (rendered font awesome)
-                        const className = await icon.getAttribute('class') || '';
-                        // Sometimes we might need to check computed style content, but let's try assuming order
-                        // Usually Zoom In is one of the first few buttons on the map
-                        if (className.includes('FontAwesome')) {
-                            // Let's grab the parent button
-                            zoomButton = icon.locator('..').locator('..');
-                            // break; // Don't break immediately, maybe verify? 
-                            // For now let's just take the first one found if we are desperate
-                            break;
-                        }
-                    }
-                }
-
-                if (!zoomButton) {
-                    throw new Error('Zoom button not found');
-                }
-
-                await zoomButton.waitFor({ state: 'visible', timeout: 5000 });
-
-                // Extra verification: Scroll into view
-                // await zoomButton.scrollIntoViewIfNeeded();
-
-                // Zoom in exactly 4 times
-                console.log('    Clicking zoom button 4 times...');
-                for (let i = 1; i <= 4; i++) {
-                    await zoomButton.click({ force: true });
-                    console.log(`      Click ${i}/4`);
-                    // Wait for animation/update
-                    await page.waitForTimeout(1000);
-                }
-                console.log('    ✓ Zoomed in 4x successfully');
-
-            } catch (e) {
-                console.log(`    Warning: Could not zoom: ${e.message}`);
-                // Try logging finding for debugging context if failed
-                console.log('    (Skipping zoom, hoping default view is okay)');
-            }
-
+            console.log('  Zooming in skipped - using default map view.');
             console.log('  Collapsing sidebar...');
             try {
                 const collapseButton = page.locator('div.v-absolutelayout-wrapper-expand-component div.v-button.v-widget').first();

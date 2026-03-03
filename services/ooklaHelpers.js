@@ -763,64 +763,7 @@ async function closeOpenPopups(page) {
 }
 
 async function zoomIn(page, clicks = 4) {
-    console.log('  Zooming in...');
-    try {
-        console.log('    Finding zoom button...');
-        let zoomButton = null;
-
-        try {
-            const containers = page.locator('.v-splitpanel-second-container');
-            if (await containers.count() > 0) {
-                const mapContainer = containers.first();
-                const buttons = mapContainer.locator('.v-button');
-                const count = await buttons.count();
-
-                for (let i = 0; i < count; i++) {
-                    const btn = buttons.nth(i);
-                    const icon = btn.locator('.v-icon.FontAwesome');
-                    if (await icon.count() > 0) {
-                        zoomButton = btn;
-                        console.log('    ✓ Found zoom button via container query');
-                        break;
-                    }
-                }
-            }
-        } catch (e) {
-            console.log('    Error searching container:', e.message);
-        }
-
-        if (!zoomButton) {
-            console.log('    Fallback: Searching globally for plus icon...');
-            const potentialButtons = page.locator('.v-button .v-icon.FontAwesome');
-            const count = await potentialButtons.count();
-            for (let i = 0; i < count; i++) {
-                const icon = potentialButtons.nth(i);
-                const className = await icon.getAttribute('class') || '';
-                if (className.includes('FontAwesome')) {
-                    zoomButton = icon.locator('..').locator('..');
-                    break;
-                }
-            }
-        }
-
-        if (!zoomButton) {
-            throw new Error('Zoom button not found');
-        }
-
-        await zoomButton.waitFor({ state: 'visible', timeout: 5000 });
-
-        console.log(`    Clicking zoom button ${clicks} times...`);
-        for (let i = 1; i <= clicks; i++) {
-            await zoomButton.click({ force: true });
-            console.log(`      Click ${i}/${clicks}`);
-            await page.waitForTimeout(1000);
-        }
-        console.log(`    ✓ Zoomed in ${clicks}x successfully`);
-
-    } catch (e) {
-        console.log(`    Warning: Could not zoom: ${e.message}`);
-        console.log('    (Skipping zoom, hoping default view is okay)');
-    }
+    console.log('  Zooming in skipped - using default map view.');
 }
 
 async function collapseSidebar(page) {
